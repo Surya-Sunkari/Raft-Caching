@@ -1,2 +1,5 @@
 1. pip install grpcio grpcio-tools
 2. python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. raft.proto
+3. implemented server.py
+4. implemented frontend.py
+5. tested the implementation
