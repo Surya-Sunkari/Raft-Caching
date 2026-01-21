@@ -32,6 +32,11 @@ pip install -r requirements.txt
 python -m grpc_tools.protoc --python_out=. --grpc_python_out=. raft.proto
 ```
 
+I had to run the following command, otherwise I got errors:
+```bash
+python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. raft.proto
+```
+
 ### 6. Run Tests
 
 ```bash
@@ -52,7 +57,7 @@ python a1_tests.py
 ## Quick Start (After Initial Setup)
 
 ```bash
-cd "/Users/omagr/Documents/Personal/distributed/assignment 1"
+cd [get to your assignment directory]
 source venv/bin/activate
 python a1_tests.py
 ```
