@@ -2,72 +2,18 @@
 
 ## Setup Instructions
 
-### 1. Install Python 3.12
+1. Install uv using https://docs.astral.sh/uv/getting-started/installation/
+1. Setup the virtual environment and install dependencies using `uv sync`
+1. Activate the virtual environment using `source .venv/bin/activate`
+1. Change working directory `cd src/kvstore`
+1. Generate protocol buffer files `python -m grpc_tools.protoc --python_out=. --grpc_python_out=. raft.proto`
+1. Run tests using `python a1_tests.py`
 
-```bash
-brew install python@3.12
-```
-
-### 2. Create Virtual Environment
-
-```bash
-/opt/homebrew/bin/python3.12 -m venv venv
-```
-
-### 3. Activate Virtual Environment
-
-```bash
-source venv/bin/activate
-```
-
-### 4. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 5. Generate Protocol Buffer Files
-
-```bash
-python -m grpc_tools.protoc --python_out=. --grpc_python_out=. raft.proto
-```
-
-I had to run the following command, otherwise I got errors:
-```bash
-python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. raft.proto
-```
-
-### 6. Run Tests
-
-```bash
-python a1_tests.py
-```
-
-## Environment Specifications (Gradescope)
-
-- Ubuntu 22.04.3 LTS
-- Python 3.12.11
-- grpcio==1.59.0
-- grpcio-tools==1.59.0
-- protobuf==4.24.4
-- configparser==7.2.0
-
-**Note:** Python 3.13 has breaking API changes with gRPC. Use Python 3.12.
-
-## Quick Start (After Initial Setup)
+## Quick Start (after Initial Setup)
 
 ```bash
 cd [get to your assignment directory]
 source venv/bin/activate
+cd src/kvstore
 python a1_tests.py
 ```
-
-## Deactivate Virtual Environment
-
-When you're done working on the project:
-
-```bash
-deactivate
-```
-
-This returns you to your system's default Python.

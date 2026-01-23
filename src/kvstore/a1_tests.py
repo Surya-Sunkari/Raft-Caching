@@ -30,13 +30,14 @@ except ImportError:
 frontend_process = None
 server_processes = {}
 
+
 class ExecutionConfig:
     """Configuration for how to start frontend and server processes"""
-    
+
     def __init__(self, config_file="test_config.json"):
         self.config = self.load_config(config_file)
         self.validate_config()
-    
+
     def load_config(self, config_file):
         """Load execution configuration"""
         # Default configuration
@@ -46,29 +47,26 @@ class ExecutionConfig:
                 "working_dir": ".",
                 "env": {},
                 "process_name_pattern": "frontend",
-                "startup_timeout": 30
+                "startup_timeout": 30,
             },
             "server": {
                 "command_template": ["python3", "server.py", "{server_id}"],
                 "working_dir": ".",
                 "env": {},
                 "process_name_pattern": "server",
-                "startup_timeout": 10
+                "startup_timeout": 10,
             },
-            "ports": {
-                "frontend_port": 8001,
-                "base_server_port": 9001
-            },
+            "ports": {"frontend_port": 8001, "base_server_port": 9001},
             "timeouts": {
                 "rpc_timeout": 5,
                 "startup_wait": 3,
-                "server_ready_timeout": 20
-            }
+                "server_ready_timeout": 20,
+            },
         }
-        
+
         if os.path.exists(config_file):
             try:
-                with open(config_file, 'r') as f:
+                with open(config_file, "r") as f:
                     user_config = json.load(f)
                 # Merge user config with defaults
                 self.merge_config(default_config, user_config)
@@ -78,55 +76,62 @@ class ExecutionConfig:
                 print("Using default configuration")
         else:
             print(f"Configuration file {config_file} not found, using defaults")
-        
+
         return default_config
-    
+
     def merge_config(self, default, user):
         """Deep merge user config into default config"""
         for key, value in user.items():
-            if key in default and isinstance(default[key], dict) and isinstance(value, dict):
+            if (
+                key in default
+                and isinstance(default[key], dict)
+                and isinstance(value, dict)
+            ):
                 self.merge_config(default[key], value)
             else:
                 default[key] = value
-    
+
     def validate_config(self):
         """Validate configuration structure"""
-        required_sections = ['frontend', 'server', 'ports', 'timeouts']
+        required_sections = ["frontend", "server", "ports", "timeouts"]
         for section in required_sections:
             if section not in self.config:
                 raise ValueError(f"Missing required config section: {section}")
-        
+
         # Validate command templates
-        if 'command' not in self.config['frontend']:
+        if "command" not in self.config["frontend"]:
             raise ValueError("Missing frontend.command in config")
-        
-        if 'command_template' not in self.config['server']:
+
+        if "command_template" not in self.config["server"]:
             raise ValueError("Missing server.command_template in config")
-        
+
         # Ensure server command template has placeholder
-        server_cmd = ' '.join(self.config['server']['command_template'])
-        if '{server_id}' not in server_cmd:
-            raise ValueError("server.command_template must contain {server_id} placeholder")
-    
+        server_cmd = " ".join(self.config["server"]["command_template"])
+        if "{server_id}" not in server_cmd:
+            raise ValueError(
+                "server.command_template must contain {server_id} placeholder"
+            )
+
     def get_frontend_command(self):
         """Get command to start frontend"""
-        return self.config['frontend']['command']
-    
+        return self.config["frontend"]["command"]
+
     def get_server_command(self, server_id):
         """Get command to start a specific server"""
-        template = self.config['server']['command_template']
+        template = self.config["server"]["command_template"]
         return [cmd.format(server_id=server_id) for cmd in template]
-    
+
     def get_working_dir(self, service_type):
         """Get working directory for service"""
-        return self.config[service_type].get('working_dir', '.')
-    
+        return self.config[service_type].get("working_dir", ".")
+
     def get_env(self, service_type):
         """Get environment variables for service"""
         env = os.environ.copy()
-        service_env = self.config[service_type].get('env', {})
+        service_env = self.config[service_type].get("env", {})
         env.update(service_env)
         return env
+
 
 class TestResult:
     def __init__(self, name, score, max_points, details):
@@ -134,6 +139,7 @@ class TestResult:
         self.score = score
         self.max_points = max_points
         self.details = details
+
 
 class TestSuite:
     def __init__(self):
@@ -147,7 +153,7 @@ class TestSuite:
     def print_results(self):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"\n===== ASSIGNMENT 1 TEST RESULTS ({now}) =====")
-        
+
         passed = 0
         for r in self.results:
             if r.score == r.max_points:
@@ -157,31 +163,38 @@ class TestSuite:
                 status = "PART"
             else:
                 status = "FAIL"
-            
-            print(f"{r.name:<30} [{status}] {r.score:.1f}/{r.max_points:.1f} — {r.details}")
-        
+
+            print(
+                f"{r.name:<30} [{status}] {r.score:.1f}/{r.max_points:.1f} — {r.details}"
+            )
+
         total_tests = len(self.results)
         failed = total_tests - passed
         pass_rate = (passed / total_tests * 100) if total_tests > 0 else 0
-        
-        print(f"\nTests run: {total_tests}, Passed: {passed}, Failed: {failed} ({pass_rate:.1f}% pass rate)")
+
+        print(
+            f"\nTests run: {total_tests}, Passed: {passed}, Failed: {failed} ({pass_rate:.1f}% pass rate)"
+        )
         print(f"Overall Score: {self.total:.1f}/100")
         print("=" * 50)
 
+
 # Initialize configuration
 config = None
+
 
 def init_config():
     """Initialize global configuration"""
     global config
     config = ExecutionConfig()
 
+
 def cleanup_all():
     """Clean up all processes on exit"""
     global frontend_process, server_processes
-    
+
     print("\nCleaning up all processes...")
-    
+
     # Kill frontend process
     if frontend_process and frontend_process.poll() is None:
         try:
@@ -194,7 +207,7 @@ def cleanup_all():
             print("Frontend process killed")
         except:
             pass
-    
+
     # Kill server processes
     for server_id, process in server_processes.items():
         if process and process.poll() is None:
@@ -208,100 +221,101 @@ def cleanup_all():
                 print(f"Server {server_id} killed")
             except:
                 pass
-    
+
     server_processes.clear()
-    
+
     # Generic cleanup by process pattern
     cleanup_all_processes()
+
 
 def cleanup_server_processes_only():
     """Kill only server processes, not frontend"""
     if not config:
         return
-    
+
     patterns = []
-    
+
     # Add server pattern
-    if 'process_name_pattern' in config.config['server']:
-        patterns.append(config.config['server']['process_name_pattern'])
-    
+    if "process_name_pattern" in config.config["server"]:
+        patterns.append(config.config["server"]["process_name_pattern"])
+
     # Add server command-based patterns
-    server_cmd_template = config.config['server']['command_template']
+    server_cmd_template = config.config["server"]["command_template"]
     if len(server_cmd_template) > 0:
         # Remove the {server_id} placeholder for pattern matching
-        server_pattern = server_cmd_template[-1].replace('{server_id}', '')
+        server_pattern = server_cmd_template[-1].replace("{server_id}", "")
         if server_pattern:
             patterns.append(server_pattern)
-    
+
     print(f"Cleaning up server processes matching patterns: {patterns}")
-    
+
     for pattern in patterns:
         if pattern:
             try:
                 # Try to kill by pattern
-                subprocess.run(['pkill', '-f', pattern], 
-                             capture_output=True, timeout=5)
+                subprocess.run(["pkill", "-f", pattern], capture_output=True, timeout=5)
                 print(f"  Cleaned up server processes matching '{pattern}'")
             except:
                 pass
-    
+
     time.sleep(2)  # Allow processes to terminate
+
 
 def cleanup_all_processes():
     """Kill all processes including frontend (for final cleanup)"""
     if not config:
         return
-    
+
     patterns = []
-    
+
     # Add frontend pattern
-    if 'process_name_pattern' in config.config['frontend']:
-        patterns.append(config.config['frontend']['process_name_pattern'])
-    
+    if "process_name_pattern" in config.config["frontend"]:
+        patterns.append(config.config["frontend"]["process_name_pattern"])
+
     # Add server pattern
-    if 'process_name_pattern' in config.config['server']:
-        patterns.append(config.config['server']['process_name_pattern'])
-    
+    if "process_name_pattern" in config.config["server"]:
+        patterns.append(config.config["server"]["process_name_pattern"])
+
     # Add command-based patterns
     frontend_cmd = config.get_frontend_command()
     if len(frontend_cmd) > 0:
         patterns.append(frontend_cmd[-1])  # Last part of command (usually filename)
-    
-    server_cmd_template = config.config['server']['command_template']
+
+    server_cmd_template = config.config["server"]["command_template"]
     if len(server_cmd_template) > 0:
         # Remove the {server_id} placeholder for pattern matching
-        server_pattern = server_cmd_template[-1].replace('{server_id}', '')
+        server_pattern = server_cmd_template[-1].replace("{server_id}", "")
         if server_pattern:
             patterns.append(server_pattern)
-    
+
     print(f"Cleaning up all processes matching patterns: {patterns}")
-    
+
     for pattern in patterns:
         if pattern:
             try:
                 # Try to kill by pattern
-                subprocess.run(['pkill', '-f', pattern], 
-                             capture_output=True, timeout=5)
+                subprocess.run(["pkill", "-f", pattern], capture_output=True, timeout=5)
                 print(f"  Cleaned up processes matching '{pattern}'")
             except:
                 pass
-    
+
     time.sleep(2)  # Allow processes to terminate
+
 
 def start_frontend():
     """Start the frontend service automatically"""
     global frontend_process
-    
+
     print("Starting frontend service...")
-    
+
     try:
         cmd = config.get_frontend_command()
-        working_dir = config.get_working_dir('frontend')
-        env = config.get_env('frontend')
-        
+        working_dir = config.get_working_dir("frontend")
+        env = config.get_env("frontend")
+
         print(f"Frontend command: {cmd}")
         print(f"Working directory: {working_dir}")
-        
+
         # Start frontend service
         frontend_process = subprocess.Popen(
             cmd,
@@ -309,25 +323,25 @@ def start_frontend():
             stderr=subprocess.PIPE,
             cwd=working_dir,
             env=env,
-            preexec_fn=os.setsid  # Create new process group for easier cleanup
+            preexec_fn=os.setsid,  # Create new process group for easier cleanup
         )
-        
+
         # Wait for frontend to be ready
-        frontend_port = config.config['ports']['frontend_port']
-        startup_timeout = config.config['frontend']['startup_timeout']
-        
+        frontend_port = config.config["ports"]["frontend_port"]
+        startup_timeout = config.config["frontend"]["startup_timeout"]
+
         print(f"Waiting for frontend on port {frontend_port}...")
-        
+
         for attempt in range(startup_timeout):
             try:
-                channel = grpc.insecure_channel(f'localhost:{frontend_port}')
+                channel = grpc.insecure_channel(f"localhost:{frontend_port}")
                 stub = raft_pb2_grpc.FrontEndStub(channel)
-                
+
                 # Try a simple call to verify it's responding
                 request = raft_pb2.GetKey(key="test", clientId=1, requestId=1)
                 response = stub.Get(request, timeout=2)
                 channel.close()
-                
+
                 # Should get "Not implemented" error, which means it's working
                 if response.wrongLeader and "Not implemented" in response.error:
                     print(f"Frontend service ready after {attempt + 1} seconds")
@@ -336,14 +350,19 @@ def start_frontend():
                 if attempt == 0:
                     print("Waiting for frontend service to start...", end="")
                 elif attempt % 5 == 0:
-                    print(f"\n  Still waiting... (attempt {attempt + 1}/{startup_timeout})", end="")
+                    print(
+                        f"\n  Still waiting... (attempt {attempt + 1}/{startup_timeout})",
+                        end="",
+                    )
                 else:
                     print(".", end="")
-                
+
                 time.sleep(1)
-        
-        print(f"\nERROR: Frontend service failed to start after {startup_timeout} seconds")
-        
+
+        print(
+            f"\nERROR: Frontend service failed to start after {startup_timeout} seconds"
+        )
+
         # Show some debug info
         if frontend_process:
             try:
@@ -354,102 +373,110 @@ def start_frontend():
                     print(f"Frontend stderr: {stderr.decode()[:500]}")
             except:
                 pass
-        
+
         return False
-        
+
     except Exception as e:
         print(f"ERROR: Failed to start frontend service: {e}")
         return False
 
+
 def check_frontend_running():
     """Check if frontend service is running"""
     try:
-        frontend_port = config.config['ports']['frontend_port']
-        channel = grpc.insecure_channel(f'localhost:{frontend_port}')
+        frontend_port = config.config["ports"]["frontend_port"]
+        channel = grpc.insecure_channel(f"localhost:{frontend_port}")
         stub = raft_pb2_grpc.FrontEndStub(channel)
-        
+
         # Try a simple call to verify it's responding
         request = raft_pb2.GetKey(key="test", clientId=1, requestId=1)
         response = stub.Get(request, timeout=3)
         channel.close()
-        
+
         # Should get "Not implemented" error, which means it's working
         return response.wrongLeader and "Not implemented" in response.error
     except Exception as e:
         print(f"Frontend check failed: {e}")
         return False
 
+
 def call_start_raft(n):
     """Call StartRaft RPC with n servers"""
     try:
-        frontend_port = config.config['ports']['frontend_port']
-        
-        channel = grpc.insecure_channel(f'localhost:{frontend_port}')
+        frontend_port = config.config["ports"]["frontend_port"]
+
+        channel = grpc.insecure_channel(f"localhost:{frontend_port}")
         stub = raft_pb2_grpc.FrontEndStub(channel)
-        
+
         request = raft_pb2.IntegerArg(arg=n)
-        response = stub.StartRaft(request, timeout=30)  # Reasonable timeout for cluster startup
+        response = stub.StartRaft(
+            request, timeout=30
+        )  # Reasonable timeout for cluster startup
         channel.close()
-        
+
         if response.error:
             return False, response.error
         return True, ""
     except Exception as e:
         return False, str(e)
+
 
 def call_start_server(server_id):
     """Call StartServer RPC for specific server"""
     try:
-        frontend_port = config.config['ports']['frontend_port']
-        
-        channel = grpc.insecure_channel(f'localhost:{frontend_port}')
+        frontend_port = config.config["ports"]["frontend_port"]
+
+        channel = grpc.insecure_channel(f"localhost:{frontend_port}")
         stub = raft_pb2_grpc.FrontEndStub(channel)
-        
+
         request = raft_pb2.IntegerArg(arg=server_id)
         response = stub.StartServer(request, timeout=15)
         channel.close()
-        
+
         if response.error:
             return False, response.error
         return True, ""
     except Exception as e:
         return False, str(e)
 
+
 def ping_server(server_id):
     """Ping a specific server"""
     try:
-        base_port = config.config['ports']['base_server_port']
-        rpc_timeout = config.config['timeouts']['rpc_timeout']
-        
+        base_port = config.config["ports"]["base_server_port"]
+        rpc_timeout = config.config["timeouts"]["rpc_timeout"]
+
         addr = f"localhost:{base_port + server_id}"
         channel = grpc.insecure_channel(addr)
         stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-        
+
         request = raft_pb2.Empty()
         response = stub.ping(request, timeout=rpc_timeout)
         channel.close()
-        
+
         return response.success
     except:
         return False
 
+
 def get_server_state(server_id):
     """Get state from a specific server"""
     try:
-        base_port = config.config['ports']['base_server_port']
-        rpc_timeout = config.config['timeouts']['rpc_timeout']
-        
+        base_port = config.config["ports"]["base_server_port"]
+        rpc_timeout = config.config["timeouts"]["rpc_timeout"]
+
         addr = f"localhost:{base_port + server_id}"
         channel = grpc.insecure_channel(addr)
         stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-        
+
         request = raft_pb2.Empty()
         response = stub.GetState(request, timeout=rpc_timeout)
         channel.close()
-        
+
         return True, response.term, response.isLeader
     except Exception as e:
         return False, 0, False
+
 
 def count_responsive_servers(max_servers):
     """Count how many servers are responsive"""
@@ -458,6 +485,7 @@ def count_responsive_servers(max_servers):
         if ping_server(i):
             responsive.append(i)
     return responsive
+
 
 def test_config_file():
     """Test 1: Configuration File"""
@@ -516,7 +544,13 @@ def test_config_file():
                 f"Cannot read the config file: {e}",
             )
     else:
-        return TestResult(test_name, 0, test_max_points, f"The config file {filename_config} is missing.")
+        return TestResult(
+            test_name,
+            0,
+            test_max_points,
+            f"The config file {filename_config} is missing.",
+        )
+
 
 def test_frontend_service():
     """Test 2: Frontend Service Startup"""
@@ -540,7 +574,8 @@ def test_frontend_service():
         test_max_points,
         f"The frontend service is responsive on port {frontend_port}.",
     )
-    
+
+
 def test_start_raft_basic():
     """Test 3: StartRaft Basic Functionality"""
     print("\n=== Test: StartRaft Basic Functionality ===")
@@ -556,7 +591,10 @@ def test_start_raft_basic():
     success, error = call_start_raft(test_servers)
     if not success:
         return TestResult(
-            test_name, 0, test_max_points, f"StartRaft({test_servers}) RPC call failed: {error}."
+            test_name,
+            0,
+            test_max_points,
+            f"StartRaft({test_servers}) RPC call failed: {error}.",
         )
 
     print("StartRaft succeeded, waiting for servers...")
@@ -582,9 +620,8 @@ def test_start_raft_basic():
             f"Started {test_servers} servers but only {len(responsive_servers)}/{test_servers} are responsive.",
         )
     else:
-        return TestResult(
-            test_name, 0, test_max_points, "No servers are responsive."
-        )
+        return TestResult(test_name, 0, test_max_points, "No servers are responsive.")
+
 
 def test_server_connectivity():
     """Test 4: Server RPC Connectivity"""
@@ -649,6 +686,7 @@ def test_server_connectivity():
             "Servers are responsive to ping but not GetState.",
         )
 
+
 def test_start_raft_different_sizes():
     """Test 5: StartRaft with Different Cluster Sizes"""
     print("\n=== Test: StartRaft with Different Sizes ===")
@@ -696,6 +734,7 @@ def test_start_raft_different_sizes():
             f"StartRaft({test_servers}) - No servers are responsive.",
         )
 
+
 def test_start_server_individual():
     """Test 6: Individual Server Start/Restart"""
     print("\n=== Test: Individual Server Start/Restart ===")
@@ -714,7 +753,10 @@ def test_start_server_individual():
         success, error = call_start_raft(test_servers)
         if not success:
             return TestResult(
-                test_name, 0, test_max_points, f"Failed to start a new cluster: {error}."
+                test_name,
+                0,
+                test_max_points,
+                f"Failed to start a new cluster: {error}.",
             )
         time.sleep(config.config["timeouts"]["startup_wait"])
         responsive_servers = count_responsive_servers(test_servers)
@@ -760,6 +802,7 @@ def test_start_server_individual():
         test_max_points,
         f"Restart Server {target_server} succeeded.",
     )
+
 
 def test_unimplemented_operations():
     """Test 7: Get/Put Return Not Implemented"""
@@ -819,10 +862,11 @@ def test_unimplemented_operations():
     except Exception as e:
         return TestResult(test_name, 0, test_max_points, f"RPC failed: {e}")
 
+
 def main():
     print("Assignment 1 Language-Agnostic Test Suite")
     print("=" * 50)
-    
+
     # Initialize configuration
     try:
         init_config()
@@ -830,27 +874,27 @@ def main():
     except Exception as e:
         print(f"FATAL ERROR: Configuration failed: {e}")
         return
-    
+
     # Register cleanup function
     atexit.register(cleanup_all)
-    
+
     # Set up signal handlers
     signal.signal(signal.SIGINT, lambda s, f: (cleanup_all(), sys.exit(0)))
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup_all(), sys.exit(0)))
-    
+
     # Clean up any existing processes first
     cleanup_all_processes()
-    
+
     # Start frontend service automatically
     if not start_frontend():
         print("FATAL ERROR: Could not start frontend service")
         return
-    
+
     print("\nFrontend service is ready, starting tests...\n")
-    
+
     # Initialize test suite
     suite = TestSuite()
-    
+
     try:
         # Run tests
         suite.add(test_config_file())
@@ -860,7 +904,7 @@ def main():
         suite.add(test_start_raft_different_sizes())
         suite.add(test_start_server_individual())
         suite.add(test_unimplemented_operations())
-    
+
     except KeyboardInterrupt:
         print("\n\nTest interrupted by user")
     except Exception as e:
@@ -868,9 +912,10 @@ def main():
     finally:
         # Cleanup will be handled by atexit
         pass
-    
+
     # Print results
     suite.print_results()
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,12 @@
+[project]
+name = "raft-assignment-1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "configparser==7.2.0",
+    "grpcio==1.59.0",
+    "grpcio-tools==1.59.0",
+    "protobuf==4.24.4",
+]
