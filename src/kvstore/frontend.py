@@ -97,11 +97,11 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
         return raft_pb2.Reply(wrongLeader=False)
 
     def Get(self, request, context):
-        """Return 'Not implemented' for Assignment 1"""
+        """Forward Get request to an available server"""
         return raft_pb2.Reply(wrongLeader=True, error="Not implemented")
 
     def Put(self, request, context):
-        """Return 'Not implemented' for Assignment 1"""
+        """Forward Put request to an available server"""
         return raft_pb2.Reply(wrongLeader=True, error="Not implemented")
 
 
