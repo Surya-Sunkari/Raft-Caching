@@ -65,7 +65,7 @@ wheels = [
 ]
 
 [[package]]
-name = "raft-assignment-1"
+name = "raft-kvstore"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
