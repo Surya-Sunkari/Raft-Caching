@@ -12,6 +12,7 @@ __pycache__/
 # Generated protobuf files
 raft_pb2.py
 raft_pb2_grpc.py
+raft_pb2.pyi
 
 # IDE
 .idea/

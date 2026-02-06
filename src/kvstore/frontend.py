@@ -1,8 +1,8 @@
+import configparser
 import grpc
 import os
 import subprocess
 from concurrent import futures
-import configparser
 
 import raft_pb2, raft_pb2_grpc, utils
 
@@ -10,6 +10,8 @@ import raft_pb2, raft_pb2_grpc, utils
 class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
     def __init__(self):
         self.server_processes = {}  # server_id -> process handle
+        self._kill_timeout_seconds = 5
+        self._rpc_timeout_seconds = 2
 
     def _start_server(self, server_id: int):
         """Start a single server process"""
@@ -36,7 +38,7 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
             if process and process.poll() is None:
                 try:
                     process.terminate()
-                    process.wait(timeout=5)
+                    process.wait(timeout=self._kill_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
@@ -49,7 +51,11 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
                 self._kill_server(server_id)
 
             # Also try to kill any orphaned server processes
-            subprocess.run(["pkill", "-f", "server.py"], capture_output=True, timeout=5)
+            subprocess.run(
+                ["pkill", "-f", "server.py"],
+                capture_output=True,
+                timeout=self._kill_timeout_seconds,
+            )
         except Exception as e:
             raise Exception(f"Failed to kill all servers: {e}")
 
@@ -99,63 +105,66 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
 
     def Get(self, request, context):
         """Forward Get request to an available server"""
-        # return raft_pb2.Reply(wrongLeader=True, error="Not implemented")
-
         server_id = self._find_available_server()
         if server_id is None:
             return raft_pb2.Reply(wrongLeader=True, error="No available server")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
-        stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-
-        server_request = raft_pb2.StringArg(arg=request.key) 
-        response = stub.Get(server_request)
-        channel.close()
-
-        response = raft_pb2.Reply(wrongLeader=False, value=response.value)
-        return response
-        
+        try:
+            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            key = raft_pb2.StringArg(arg=request.key)
+            response = stub.Get(key, timeout=self._rpc_timeout_seconds)
+            return raft_pb2.Reply(wrongLeader=False, value=response.value)
+        except grpc.RpcError as e:
+            return raft_pb2.Reply(wrongLeader=True, error=str(e))
+        finally:
+            channel.close()
 
     def Put(self, request, context):
         """Forward Put request to an available server"""
-        # return raft_pb2.Reply(wrongLeader=True, error="Not implemented")
-
         server_id = self._find_available_server()
         if server_id is None:
             return raft_pb2.Reply(wrongLeader=True, error="No available server")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
-        stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-        server_request = raft_pb2.KeyValue(key=request.key, value=request.value)
-        response = stub.Put(server_request)
-        channel.close()
-
-        if response.success:    
-            response = raft_pb2.Reply(wrongLeader=False)
-        else:
-            response = raft_pb2.Reply(wrongLeader=True, error="Failed to put key-value pair")
-        return response
+        try:
+            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            key_value = raft_pb2.KeyValue(key=request.key, value=request.value)
+            response = stub.Put(key_value, timeout=self._rpc_timeout_seconds)
+            if response.success:
+                return raft_pb2.Reply(wrongLeader=False)
+            else:
+                return raft_pb2.Reply(
+                    wrongLeader=True, error="Failed to put key-value pair"
+                )
+        except grpc.RpcError as e:
+            return raft_pb2.Reply(
+                wrongLeader=True, error=f"Failed to put key-value pair due to {str(e)}"
+            )
+        finally:
+            channel.close()
 
     def _get_active_servers(self):
         config = configparser.ConfigParser()
-        config.read('config.ini')
-        active_str = config.get('Servers', 'active')  # Gets "0,1,2,3,4"
-        active_ids = [int(id.strip()) for id in active_str.split(',')]          
+        config.read("config.ini")
+        active_str = config.get("Servers", "active")  # Gets "0,1,2,3,4"
+        active_ids = [int(id.strip()) for id in active_str.split(",")]
         return active_ids
 
     def _ping_server(self, server_id):
         """Returns True if server responds to ping, False otherwise"""
         port = 9001 + server_id
+        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
         try:
-            channel = grpc.insecure_channel(f"127.0.0.1:{port}")
             stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-            stub.ping(raft_pb2.Empty(), timeout=2)
-            channel.close()  # Optional cleanup
+            stub.ping(raft_pb2.Empty(), timeout=self._rpc_timeout_seconds)
             return True
-        except:
+        except grpc.RpcError:
             return False
+        finally:
+            channel.close()
 
     def _find_available_server(self):
         """Returns server_id of first available server, or None"""

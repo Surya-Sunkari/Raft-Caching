@@ -10,7 +10,12 @@ A distributed key-value store implementation using the Raft consensus protocol.
 4. Change working directory `cd src/kvstore`
 5. Generate protocol buffer files:
    ```bash
-   python -m grpc_tools.protoc --python_out=. --grpc_python_out=. raft.proto
+   python -m grpc_tools.protoc \
+   --proto_path=. \
+   --python_out=. \
+   --grpc_python_out=. \
+   --pyi_out=. \
+   raft.proto
    ```
 
 ## Running Tests
