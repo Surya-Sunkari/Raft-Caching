@@ -1,0 +1,31 @@
+{
+  "frontend": {
+    "command": ["python3", "frontend.py"],
+    "working_dir": ".",
+    "env": {
+      "PYTHONPATH": "."
+    },
+    "process_name_pattern": "frontend",
+    "startup_timeout": 15
+  },
+  "server": {
+    "command_template": ["python3", "server.py", "{server_id}"],
+    "working_dir": ".",
+    "env": {
+      "PYTHONPATH": "."
+    },
+    "process_name_pattern": "server",
+    "startup_timeout": 10
+  },
+  "ports": {
+    "frontend_port": 8001,
+    "base_server_port": 9001
+  },
+  "timeouts": {
+    "rpc_timeout": 8,
+    "startup_wait": 4,
+    "server_ready_timeout": 20,
+    "leader_election_timeout": 15,
+    "leader_stability_timeout": 5
+  }
+}
