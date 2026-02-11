@@ -26,6 +26,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         self.state_lock = threading.RLock()
 
         self.election_timer = None
+        self.heartbeat_timer = None
         self._reset_election_timer()
 
     def Get(self, request, context):
@@ -108,7 +109,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
     def _reset_election_timer(self):
         if self.election_timer is not None:
             self.election_timer.cancel()
-
+        
+        if self.heartbeat_timer is not None:
+            self.heartbeat_timer.cancel()
+        
         self.election_timer = threading.Timer(random.uniform(0.15, 0.3), self._start_election)
         self.election_timer.start()
         
@@ -156,7 +160,45 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             return
 
     def _become_leader(self):
-        pass
+        self.role = "leader"
+        self.leaderId = self.server_id
+        self.election_timer.cancel()
+
+        self.heartbeat_timer = threading.Timer(0.050, self._send_heartbeat)
+        self.heartbeat_timer.start()
+
+    def _send_heartbeat(self):
+
+        with self.state_lock:
+            if self.role != "leader":
+                return
+
+        threads = []   
+        for peer_id in self.peer_servers:
+            t = threading.Thread(target=self._send_heartbeat_to_peer, args=(peer_id, self.state_lock))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        with self.state_lock:
+            if self.role == "leader":
+                self.heartbeat_timer = threading.Timer(0.050, self._send_heartbeat)
+                self.heartbeat_timer.start()
+
+    def _send_heartbeat_to_peer(self, peer_id, state_lock):
+        stub = self._get_server_stub(peer_id)
+        try:
+            reply = stub.AppendEntries(raft_pb2.AppendEntriesArgs(term=self.currentTerm, leaderId=self.server_id, prevLogIndex=0, prevLogTerm=0, entries=[], leaderCommit=0), timeout=2)
+            if reply.term > self.currentTerm:
+                with state_lock:
+                    self.currentTerm = reply.term
+                    self.role = "follower"
+                    self.votedFor = None
+                    self._reset_election_timer()
+        except grpc.RpcError:
+            return
 
 def serve(server_id):
     if not utils.is_server_id_valid(server_id):

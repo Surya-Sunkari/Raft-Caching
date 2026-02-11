@@ -105,9 +105,9 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
 
     def Get(self, request, context):
         """Forward Get request to an available server"""
-        server_id = self._find_available_server()
+        server_id = self._find_leader()
         if server_id is None:
-            return raft_pb2.Reply(wrongLeader=True, error="No available server")
+            return raft_pb2.Reply(wrongLeader=True, error="No leader found")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
@@ -123,9 +123,9 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
 
     def Put(self, request, context):
         """Forward Put request to an available server"""
-        server_id = self._find_available_server()
+        server_id = self._find_leader()
         if server_id is None:
-            return raft_pb2.Reply(wrongLeader=True, error="No available server")
+            return raft_pb2.Reply(wrongLeader=True, error="No leader found")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
@@ -145,6 +145,25 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
             )
         finally:
             channel.close()
+
+    def _get_state(self, server_id):
+        port = 9001 + server_id
+        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+        try:
+            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            response = stub.GetState(raft_pb2.Empty(), timeout=self._rpc_timeout_seconds)
+            return response.term, response.isLeader
+        except grpc.RpcError:
+            return None, None
+        finally:
+            channel.close()
+
+    def _find_leader(self):
+        for server_id in self._get_active_servers():
+            term, isLeader = self._get_state(server_id)
+            if isLeader:
+                return server_id
+        return self._find_available_server()
 
     def _get_active_servers(self):
         config = configparser.ConfigParser()
