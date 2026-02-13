@@ -9,7 +9,7 @@ import raft_pb2, raft_pb2_grpc, utils
 
 class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
     def __init__(self):
-        self.server_processes = {}  # server_id -> process handle
+        self._server_processes = {}  # server_id -> process handle
         self._kill_timeout_seconds = 5
         self._rpc_timeout_seconds = 2
 
@@ -22,7 +22,7 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
                 stderr=subprocess.PIPE,
                 preexec_fn=os.setsid,  # Create new process group to able to cleanly kill it
             )
-            self.server_processes[server_id] = process
+            self._server_processes[server_id] = process
             return True
         except Exception as e:
             raise Exception(f"Failed to start server {server_id}: {e}")
@@ -30,11 +30,11 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
     def _kill_server(self, server_id: int):
         """Kill a single server process by ID"""
         try:
-            if not server_id in self.server_processes:
+            if not server_id in self._server_processes:
                 return
 
-            process = self.server_processes[server_id]
-            del self.server_processes[server_id]
+            process = self._server_processes[server_id]
+            del self._server_processes[server_id]
             if process and process.poll() is None:
                 try:
                     process.terminate()
@@ -47,7 +47,7 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
 
     def _kill_all_servers(self):
         try:
-            for server_id in list(self.server_processes.keys()):
+            for server_id in list(self._server_processes.keys()):
                 self._kill_server(server_id)
 
             # Also try to kill any orphaned server processes
@@ -103,11 +103,64 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
         # success response
         return raft_pb2.Reply(wrongLeader=False)
 
+    def _ping_server(self, server_id):
+        """Returns True if server responds to ping, False otherwise"""
+        port = 9001 + server_id
+        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+        try:
+            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            stub.ping(raft_pb2.Empty(), timeout=self._rpc_timeout_seconds)
+            return True
+        except grpc.RpcError:
+            return False
+        finally:
+            channel.close()
+
+    def _get_server_state(self, server_id):
+        """Returns (success, term, is_leader) for the given server_id"""
+        port = 9001 + server_id
+        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+        try:
+            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            response = stub.GetState(
+                raft_pb2.Empty(), timeout=self._rpc_timeout_seconds
+            )
+            if response.success:
+                return True, response.term, response.isLeader
+            else:
+                return False, None, None
+        except grpc.RpcError:
+            return False, None, None
+        finally:
+            channel.close()
+
+    def _find_available_server(self):
+        """Returns server_id of first available server, or None"""
+        for server_id in utils.get_active_servers():
+            if self._ping_server(server_id):
+                return server_id
+        return None
+
+    def _find_leader_server(self):
+        """Find current leader by checking GetState on all servers"""
+        # TODO: Make GetState calls to server parallel
+        active_servers = utils.get_active_servers()
+        for server_id in active_servers:
+            try:
+                success, _, is_leader = self._get_server_state(server_id)
+                if success and is_leader:
+                    return server_id
+            except:
+                continue
+
+        # No leader found, return any available server
+        return self._find_available_server()
+
     def Get(self, request, context):
         """Forward Get request to an available server"""
-        server_id = self._find_leader()
+        server_id = self._find_leader_server()
         if server_id is None:
-            return raft_pb2.Reply(wrongLeader=True, error="No leader found")
+            return raft_pb2.Reply(wrongLeader=True, error="No servers available")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
@@ -123,9 +176,9 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
 
     def Put(self, request, context):
         """Forward Put request to an available server"""
-        server_id = self._find_leader()
+        server_id = self._find_leader_server()
         if server_id is None:
-            return raft_pb2.Reply(wrongLeader=True, error="No leader found")
+            return raft_pb2.Reply(wrongLeader=True, error="No servers available")
 
         port = 9001 + server_id
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
@@ -145,52 +198,6 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
             )
         finally:
             channel.close()
-
-    def _get_state(self, server_id):
-        port = 9001 + server_id
-        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
-        try:
-            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-            response = stub.GetState(raft_pb2.Empty(), timeout=self._rpc_timeout_seconds)
-            return response.term, response.isLeader
-        except grpc.RpcError:
-            return None, None
-        finally:
-            channel.close()
-
-    def _find_leader(self):
-        for server_id in self._get_active_servers():
-            term, isLeader = self._get_state(server_id)
-            if isLeader:
-                return server_id
-        return self._find_available_server()
-
-    def _get_active_servers(self):
-        config = configparser.ConfigParser()
-        config.read("config.ini")
-        active_str = config.get("Servers", "active")  # Gets "0,1,2,3,4"
-        active_ids = [int(id.strip()) for id in active_str.split(",")]
-        return active_ids
-
-    def _ping_server(self, server_id):
-        """Returns True if server responds to ping, False otherwise"""
-        port = 9001 + server_id
-        channel = grpc.insecure_channel(f"127.0.0.1:{port}")
-        try:
-            stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-            stub.ping(raft_pb2.Empty(), timeout=self._rpc_timeout_seconds)
-            return True
-        except grpc.RpcError:
-            return False
-        finally:
-            channel.close()
-
-    def _find_available_server(self):
-        """Returns server_id of first available server, or None"""
-        for server_id in self._get_active_servers():
-            if self._ping_server(server_id):
-                return server_id
-        return None
 
 
 def serve():

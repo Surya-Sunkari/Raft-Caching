@@ -23,3 +23,6 @@ raft_pb2.pyi
 # OS files
 .DS_Store
 Thumbs.db
+
+# Custom
+*.log
