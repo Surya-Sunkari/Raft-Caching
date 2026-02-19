@@ -6,7 +6,7 @@
       "PYTHONPATH": "."
     },
     "process_name_pattern": "frontend",
-    "startup_timeout": 15
+    "startup_timeout": 30
   },
   "server": {
     "command_template": ["python3", "server.py", "{server_id}"],
@@ -22,10 +22,10 @@
     "base_server_port": 9001
   },
   "timeouts": {
-    "rpc_timeout": 8,
-    "startup_wait": 4,
+    "rpc_timeout": 10,
+    "startup_wait": 5,
     "server_ready_timeout": 20,
     "leader_election_timeout": 15,
-    "leader_stability_timeout": 5
+    "replication_timeout": 10
   }
 }
