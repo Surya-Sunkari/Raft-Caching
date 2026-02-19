@@ -5,6 +5,7 @@ import queue
 import random
 import sys
 import threading
+import time
 from concurrent import futures
 from typing import Optional, Any
 
@@ -68,8 +69,33 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             return raft_pb2.KeyValue(key=key, value=value)
 
     def Put(self, request, context):
-        with self._store_lock:
-            return raft_pb2.GenericResponse(success=True)
+        with self._state_lock:
+            if self._role != ServerRole.LEADER:
+                return raft_pb2.GenericResponse(success=False, error="Not leader")
+
+            # Create and append log entry
+            entry = raft_pb2.LogEntry(
+                term=self._current_term,
+                key=request.key,
+                value=request.value,
+                clientId=request.clientId,
+                requestId=request.requestId,
+            )
+            self._log.append(entry)
+            log_index = len(self._log) - 1
+
+        # Wait for commit (heartbeat loop replicates; poll to avoid blocking it)
+        timeout = 10
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(0.02)
+            with self._state_lock:
+                if self._role != ServerRole.LEADER:
+                    return raft_pb2.GenericResponse(success=False, error="Not leader")
+                if self._commit_index >= log_index:
+                    return raft_pb2.GenericResponse(success=True)
+
+        return raft_pb2.GenericResponse(success=False, error="Timeout waiting for commit")
 
     def ping(self, request, context):
         return raft_pb2.GenericResponse(success=True)
@@ -112,7 +138,14 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             # Note that the previous higher term discovery may have changed self._current_term, so we need to compare with candidate_term again
             if candidate_term == self._current_term:
                 # Same term, and not voted or voted for the one who is asking again
-                if self._voted_for is None or self._voted_for == candidate_id:
+                # Candidate's log must be at least as up-to-date as ours (Raft safety)
+                our_last_idx = len(self._log) - 1
+                our_last_term = self._log[our_last_idx].term if our_last_idx >= 1 else 0
+                candidate_up_to_date = (
+                    request.lastLogTerm > our_last_term
+                    or (request.lastLogTerm == our_last_term and request.lastLogIndex >= our_last_idx)
+                )
+                if (self._voted_for is None or self._voted_for == candidate_id) and candidate_up_to_date:
                     self._voted_for = candidate_id
                     self._reset_election_timer()  # Reset election timer on vote grant
                     logger.debug(
@@ -201,6 +234,8 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             self._voted_for = self._server_id
             election_term = self._current_term
             votes = {self._server_id}
+            last_log_index = len(self._log) - 1
+            last_log_term = self._log[last_log_index].term if last_log_index >= 1 else 0
 
             # Reset election timer so a new election starts if this one fails
             self._reset_election_timer()
@@ -210,7 +245,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         for server_id, channel in self._channels.items():
             stub = raft_pb2_grpc.KeyValueStoreStub(channel)
             args = raft_pb2.RequestVoteArgs(
-                term=election_term, candidateId=self._server_id
+                term=election_term,
+                candidateId=self._server_id,
+                lastLogIndex=last_log_index,
+                lastLogTerm=last_log_term,
             )
             threading.Thread(
                 target=self._call_server, args=(stub, args, server_id, result_queue)

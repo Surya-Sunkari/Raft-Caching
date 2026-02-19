@@ -157,8 +157,8 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
         return self._find_available_server()
 
     def Get(self, request, context):
-        """Forward Get request to an available server"""
-        server_id = self._find_leader_server()
+        """Forward Get request to an available server (any server can serve reads)"""
+        server_id = self._find_available_server()
         if server_id is None:
             return raft_pb2.Reply(wrongLeader=True, error="No servers available")
 
@@ -184,13 +184,18 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
         channel = grpc.insecure_channel(f"127.0.0.1:{port}")
         try:
             stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-            key_value = raft_pb2.KeyValue(key=request.key, value=request.value)
+            key_value = raft_pb2.KeyValue(
+                key=request.key,
+                value=request.value,
+                clientId=request.clientId,
+                requestId=request.requestId,
+            )
             response = stub.Put(key_value, timeout=self._rpc_timeout_seconds)
             if response.success:
                 return raft_pb2.Reply(wrongLeader=False)
             else:
                 return raft_pb2.Reply(
-                    wrongLeader=True, error="Failed to put key-value pair"
+                    wrongLeader=True, error=response.error or "Failed to put key-value pair"
                 )
         except grpc.RpcError as e:
             return raft_pb2.Reply(
