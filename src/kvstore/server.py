@@ -34,6 +34,13 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         self._election_timer = None
         self._reset_election_timer()
 
+        self._log = [None]          # Raft log: index 0 unused, entries start at index 1
+        self._commit_index = 0         # Commit index: highest index known to be committed
+        self._last_applied = 0        # Last applied: highest index applied to state machine
+
+        self._next_index = {}   # server_id -> next log index to send
+        self._match_index = {}  # server_id -> highest replicated index
+
         # Channels
         active_servers = utils.get_active_servers()
         self._channels = {
@@ -62,7 +69,6 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
     def Put(self, request, context):
         with self._store_lock:
-            self._store[request.key] = request.value
             return raft_pb2.GenericResponse(success=True)
 
     def ping(self, request, context):
@@ -71,7 +77,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
     def GetState(self, request, context):
         with self._state_lock:
             return raft_pb2.State(
-                term=self._current_term, isLeader=(self._role == ServerRole.LEADER)
+                term=self._current_term, 
+                isLeader=self._role == ServerRole.LEADER,
+                commitIndex=self._commit_index,
+                lastApplied=self._last_applied,
             )
 
     def _on_higher_term_discovery(self, term: int):
@@ -134,6 +143,31 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 self._leader_id is None or self._leader_id == request.leaderId
             )  # sanity
             assert self._role != ServerRole.LEADER  # sanity
+            
+            # If prevLogIndex > 0, leader says "my log has X at index prevLogIndex with term prevLogTerm"
+            # Follower must have the same entry there, or we reject
+            if request.prevLogIndex > 0:
+                if request.prevLogIndex >= len(self._log):
+                    # Follower doesn't have an entry at prevLogIndex
+                    return raft_pb2.AppendEntriesReply(term=self._current_term, success=False)
+                if self._log[request.prevLogIndex].term != request.prevLogTerm:
+                    # Term mismatch at prevLogIndex
+                    return raft_pb2.AppendEntriesReply(term=self._current_term, success=False)
+
+            for i, entry in enumerate(request.entries):
+                log_index = request.prevLogIndex + i + 1
+                if log_index < len(self._log):
+                    if self._log[log_index].term != entry.term:
+                        # Conflict: truncate from here and replace
+                        self._log = self._log[:log_index]
+                        self._log.append(entry)
+                else:
+                    self._log.append(entry)
+
+            if request.leaderCommit > self._commit_index:
+                self._commit_index = min(request.leaderCommit, len(self._log) - 1)
+                self._apply_committed_entries()        
+            
             self._leader_id = request.leaderId
             self._reset_election_timer()
             return raft_pb2.AppendEntriesReply(term=self._current_term, success=True)
@@ -213,6 +247,15 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     )
                     if len(votes) > len(active_servers) // 2:
                         self._role = ServerRole.LEADER
+
+                        # Initialize leader-only state
+                        last_log_index = len(self._log) - 1
+                        self._next_index = {
+                            sid: last_log_index + 1
+                            for sid in self._channels.keys()
+                        }
+                        self._match_index = {sid: 0 for sid in self._channels.keys()}
+
                         self._leader_id = self._server_id
                         self._reset_election_timer()
                         threading.Thread(
@@ -227,19 +270,30 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 if self._role != ServerRole.LEADER:
                     return
                 term = self._current_term
+                # Build AppendEntries args for each follower
+                requests = {}  # server_id -> args
+                for server_id in self._channels.keys():
+                    prev_idx = self._next_index[server_id] - 1
+                    prev_term = self._log[prev_idx].term if prev_idx >= 1 else 0
+                    entries = self._log[self._next_index[server_id]:]  # entries from next_index onward
+                    requests[server_id] = raft_pb2.AppendEntriesArgs(
+                        term=term,
+                        leaderId=self._server_id,
+                        prevLogIndex=prev_idx,
+                        prevLogTerm=prev_term,
+                        entries=entries,
+                        leaderCommit=self._commit_index,
+                    )
 
-            # Send AppendEntries in parallel (outside lock)
             result_queue = queue.Queue()
             for server_id, channel in self._channels.items():
                 stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-                args = raft_pb2.AppendEntriesArgs(
-                    term=term,
-                    leaderId=self._server_id,
-                )
+                args = requests[server_id]
                 threading.Thread(
                     target=self._send_append_entry,
                     args=(stub, args, server_id, result_queue),
                 ).start()
+
 
             for _ in range(len(self._channels)):
                 server_id, response, error = result_queue.get()
@@ -248,10 +302,40 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 with self._state_lock:
                     if response.term > self._current_term:
                         self._on_higher_term_discovery(response.term)
-                        return  # No longer leader
+                        return
+                    if self._role != ServerRole.LEADER:
+                        return
+                    if response.success:
+                        # Update nextIndex and matchIndex
+                        last_sent = requests[server_id].prevLogIndex + len(requests[server_id].entries)
+                        self._next_index[server_id] = last_sent + 1
+                        self._match_index[server_id] = last_sent
+                    else:
+                        # Decrement nextIndex and retry next time
+                        self._next_index[server_id] = max(1, self._next_index[server_id] - 1)
+
+            # Advance commitIndex if majority replicated (after processing ALL responses)
+            with self._state_lock:
+                if self._role != ServerRole.LEADER:
+                    return
+                n = len(self._log) - 1
+                while n > self._commit_index:
+                    if self._log[n].term != self._current_term:
+                        n -= 1
+                        continue
+                    count = 1  # leader has it
+                    for sid, mi in self._match_index.items():
+                        if mi >= n:
+                            count += 1
+                    if count > len(utils.get_active_servers()) // 2:
+                        self._commit_index = n
+                        self._apply_committed_entries()
+                        break
+                    n -= 1
 
             logger.debug(f"{self._server_id} sleeping now for 50ms.")
             threading.Event().wait(0.05)
+
 
     def _send_append_entry(self, stub, args, server_id, q):
         try:
@@ -259,6 +343,16 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             q.put((server_id, response, None))
         except Exception as e:
             q.put((server_id, None, e))
+
+    def _apply_committed_entries(self):
+        """Apply committed entries (last_applied+1 ... commit_index) to state machine.
+        _apply_committed_entries must always be called while holding _state_lock"""
+        while self._last_applied < self._commit_index:
+            self._last_applied += 1
+            entry = self._log[self._last_applied]
+            # Apply: state_machine[key] = value
+            with self._store_lock:
+                self._store[entry.key] = entry.value
 
 
 def serve(server_id):
