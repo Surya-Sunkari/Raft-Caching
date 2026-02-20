@@ -25,4 +25,6 @@ source .venv/bin/activate
 cd src/kvstore
 python a1_tests.py  # Infrastructure tests
 python a2_tests.py  # Key-value store tests
+python a3_tests.py  # Key-value store tests
+python a4_tests.py  # Key-value store tests
 ```
