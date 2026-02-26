@@ -341,8 +341,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 with self._state_lock:  # take lock only for preparing args
                     if self._role != ServerRole.LEADER:
                         return
-                    # If this follower has (re)appeared and we don't yet track it,
-                    # start by assuming it is caught up to our current log.
+                    
                     if follower_id not in self._next_index:
                         self._next_index[follower_id] = len(self._log)
 
