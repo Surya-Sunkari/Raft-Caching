@@ -241,11 +241,17 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             elif request.term > self._current_term:
                 self._on_higher_term_discovery(request.term)
 
-            # Same term
             assert (
                 self._leader_id is None or self._leader_id == request.leaderId
             )  # sanity
-            assert self._role != ServerRole.LEADER  # sanity
+            if self._role == ServerRole.LEADER:
+                return raft_pb2.AppendEntriesReply(
+                    term=self._current_term, success=False
+                )
+
+            if self._role == ServerRole.CANDIDATE:
+                self._role = ServerRole.FOLLOWER
+
             self._leader_id = request.leaderId
             self._reset_election_timer()
 
