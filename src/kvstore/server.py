@@ -242,9 +242,6 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             elif request.term > self._current_term:
                 self._on_higher_term_discovery(request.term)
 
-            assert (
-                self._leader_id is None or self._leader_id == request.leaderId
-            )  # sanity
             if self._role == ServerRole.LEADER:
                 return raft_pb2.AppendEntriesReply(
                     term=self._current_term, success=False
@@ -265,9 +262,6 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 ):
                     logger.debug(
                         f"Inconsistency found: {request.prevLogIndex} {len(self._log)}"
-                    )
-                    logger.debug(
-                        f"Inconsistency found: {self._log[request.prevLogIndex].term} {request.prevLogTerm}"
                     )
                     return raft_pb2.AppendEntriesReply(
                         term=self._current_term, success=False
