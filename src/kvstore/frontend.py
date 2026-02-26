@@ -142,11 +142,13 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
             ).start()
         for _ in range(len(self._channels)):
             server_id, response, error = result_queue.get()
-            if error:
+            # If there was an error talking to this server, skip it
+            if error or response is None:
                 continue
-            response: raft_pb2.GenericResponse = response
-            if response.success:
-                return server_id
+
+            # Any successful GetState reply means the server is up and responsive
+            # (GetState returns a State message, not a GenericResponse).
+            return server_id
         return None
 
     def _find_leader_server(self):
