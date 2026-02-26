@@ -347,9 +347,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
                     next_index = self._next_index[follower_id]
                     prevLogIndex = next_index - 1
-                    prevLogTerm = (
-                        self._log[prevLogIndex].term if prevLogIndex > 0 else None
-                    )
+                    if prevLogIndex > 0:
+                        prevLogTerm = self._log[prevLogIndex].term
+                    else:
+                        prevLogTerm = 0
                     entries = (
                         self._log[next_index:] if next_index < len(self._log) else []
                     )
