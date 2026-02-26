@@ -100,28 +100,33 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         with self._state_lock:
             candidate_term = request.term
             candidate_id = request.candidateId
+            candidate_last_index = request.lastLogIndex
+            candidate_last_term = request.lastLogTerm
 
-            # Update term if candidate's is higher
             if candidate_term > self._current_term:
                 self._on_higher_term_discovery(candidate_term)
 
-            # Note that the previous higher term discovery may have changed self._current_term
-            # so we need to compare with candidate_term again
             if candidate_term == self._current_term:
-                # Same term, and not voted or voted for the one who is asking again
-                if self._voted_for is None or self._voted_for == candidate_id:
+                last_log_index = len(self._log) - 1
+                last_log_term = self._log[last_log_index].term if last_log_index > 0 else 0
+
+                candidate_up_to_date = (
+                    candidate_last_term > last_log_term
+                    or (
+                        candidate_last_term == last_log_term
+                        and candidate_last_index >= last_log_index
+                    )
+                )
+
+                if candidate_up_to_date and (
+                    self._voted_for is None or self._voted_for == candidate_id
+                ):
                     self._voted_for = candidate_id
-                    self._reset_election_timer()  # Reset election timer on vote grant
-                    # logger.debug(
-                    #     f"{self._server_id} voting for candidate {candidate_id} in term {candidate_term}"
-                    # )
+                    self._reset_election_timer()
                     return raft_pb2.RequestVoteReply(
                         term=self._current_term, voteGranted=True
                     )
 
-            # logger.debug(
-            #     f"{self._server_id} rejecting voting for candidate {candidate_id} in term {candidate_term}"
-            # )
             return raft_pb2.RequestVoteReply(
                 term=self._current_term,
                 voteGranted=False,
@@ -167,8 +172,14 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         result_queue = queue.Queue()
         for server_id, channel in self._channels.items():
             stub = raft_pb2_grpc.KeyValueStoreStub(channel)
+            with self._state_lock:
+                last_log_index = len(self._log) - 1
+                last_log_term = self._log[last_log_index].term if last_log_index > 0 else 0
             args = raft_pb2.RequestVoteArgs(
-                term=election_term, candidateId=self._server_id
+                term=election_term,
+                candidateId=self._server_id,
+                lastLogIndex=last_log_index,
+                lastLogTerm=last_log_term,
             )
             threading.Thread(
                 target=self._send_request_vote,
