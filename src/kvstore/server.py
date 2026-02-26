@@ -5,6 +5,7 @@ import queue
 import random
 import sys
 import threading
+import time
 from concurrent import futures
 from typing import List, Optional, Any
 
@@ -443,8 +444,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             log_index = len(self._log) - 1
             logger.debug(f"Inserted entry {entry} to log at index {log_index}")
 
-        # Check on commitIndex sleeping in between
-        # TODO: Better to check only when leadership status has changed or self._commit_index advances
+        start_time = time.time()
         while True:
             with self._state_lock:
                 if self._role != ServerRole.LEADER:
@@ -453,6 +453,11 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 if self._commit_index >= log_index:
                     logger.debug(f"Put request success")
                     return raft_pb2.GenericResponse(success=True)
+                if time.time() - start_time > 10:
+                    logger.debug(f"Put request timed out waiting for commit {request}")
+                    return raft_pb2.GenericResponse(
+                        success=False, error="Timeout waiting for commit"
+                    )
 
             logger.debug(f"{self._server_id} sleeping now for 50ms.")
             threading.Event().wait(0.05)
