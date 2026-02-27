@@ -5,7 +5,6 @@ import queue
 import random
 import sys
 import threading
-import time
 from concurrent import futures
 from typing import List, Optional, Any
 
@@ -50,7 +49,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             for server_id in self._active_servers
             if server_id != self._server_id
         }
-        # logger.debug("init finished")
+        logger.debug("init finished")
 
     def ping(self, request, context):
         """Health check endpoint"""
@@ -80,6 +79,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
     def _on_higher_term_discovery(self, term: int):
         with self._state_lock:
+            logger.debug(
+                f"Higher term discovered, current term {self._current_term}, discovered {term}"
+            )
             assert term > self._current_term, (
                 "Should only call on_higher_term_discovery with a higher term"
             )
@@ -100,33 +102,34 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         with self._state_lock:
             candidate_term = request.term
             candidate_id = request.candidateId
-            candidate_last_index = request.lastLogIndex
-            candidate_last_term = request.lastLogTerm
 
+            # Update term if candidate's is higher
             if candidate_term > self._current_term:
                 self._on_higher_term_discovery(candidate_term)
 
+            # Note that the previous higher term discovery may have changed self._current_term
+            # so we need to compare with candidate_term again
             if candidate_term == self._current_term:
-                last_log_index = len(self._log) - 1
-                last_log_term = self._log[last_log_index].term if last_log_index > 0 else 0
-
-                candidate_up_to_date = (
-                    candidate_last_term > last_log_term
-                    or (
-                        candidate_last_term == last_log_term
-                        and candidate_last_index >= last_log_index
+                # Same term, and not voted or voted for the one who is asking again
+                if self._voted_for is None or self._voted_for == candidate_id:
+                    # Log up-to-dateness check (Section 5.4.1)
+                    my_last_log_index = len(self._log) - 1
+                    my_last_log_term = (
+                        self._log[-1].term if my_last_log_index > 0 else 0
                     )
-                )
+                    if request.lastLogTerm > my_last_log_term or (
+                        request.lastLogTerm == my_last_log_term
+                        and request.lastLogIndex >= my_last_log_index
+                    ):
+                        self._voted_for = candidate_id
+                        self._reset_election_timer()
+                        return raft_pb2.RequestVoteReply(
+                            term=self._current_term, voteGranted=True
+                        )
 
-                if candidate_up_to_date and (
-                    self._voted_for is None or self._voted_for == candidate_id
-                ):
-                    self._voted_for = candidate_id
-                    self._reset_election_timer()
-                    return raft_pb2.RequestVoteReply(
-                        term=self._current_term, voteGranted=True
-                    )
-
+            # logger.debug(
+            #     f"{self._server_id} rejecting voting for candidate {candidate_id} in term {candidate_term}"
+            # )
             return raft_pb2.RequestVoteReply(
                 term=self._current_term,
                 voteGranted=False,
@@ -143,6 +146,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             response = stub.RequestVote(request_params)
             queue.put((server_id, response, None))
         except Exception as e:
+            logger.debug(f"Sending {request_params} failed with exception {e}")
             queue.put((server_id, None, e))
 
     def _start_election(self):
@@ -156,14 +160,16 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 return
 
             # Advance to candidacy and vote for self
-            logger.debug(
-                f"Server {self._server_id} starting election for term {self._current_term + 1}"
-            )
+            # logger.debug(
+            #     f"Server {self._server_id} starting election for term {self._current_term + 1}"
+            # )
             self._current_term += 1
             self._role = ServerRole.CANDIDATE
             self._voted_for = self._server_id
             election_term = self._current_term
             votes = {self._server_id}
+            last_log_index = len(self._log) - 1
+            last_log_term = self._log[-1].term if last_log_index > 0 else 0
 
             # Reset election timer so a new election starts if this one fails
             self._reset_election_timer()
@@ -172,9 +178,6 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         result_queue = queue.Queue()
         for server_id, channel in self._channels.items():
             stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-            with self._state_lock:
-                last_log_index = len(self._log) - 1
-                last_log_term = self._log[last_log_index].term if last_log_index > 0 else 0
             args = raft_pb2.RequestVoteArgs(
                 term=election_term,
                 candidateId=self._server_id,
@@ -216,9 +219,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     #     f"{self._server_id} received vote from peer {server_id} for term {self._current_term}, total votes: {len(votes)}"
                     # )
                     if len(votes) > len(active_servers) // 2:
-                        logger.debug(
-                            f"Server {self._server_id} elected as leader for term {self._current_term}"
-                        )
+                        # logger.debug(
+                        #     f"Server {self._server_id} elected as leader for term {self._current_term}"
+                        # )
                         self._role = ServerRole.LEADER
                         self._leader_id = self._server_id
                         self._reset_election_timer()
@@ -241,6 +244,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             entry = self._log[self._last_applied]
             # Apply to state machine using key and value from LogEntry
             self._state_machine[entry.key] = entry.value
+            logger.debug(f"Applied {entry}")
 
     def AppendEntries(self, request: raft_pb2.AppendEntriesArgs, context):
         logger.debug(f"AppendEntry request received {request}")
@@ -253,26 +257,30 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             elif request.term > self._current_term:
                 self._on_higher_term_discovery(request.term)
 
-            if self._role == ServerRole.LEADER:
-                return raft_pb2.AppendEntriesReply(
-                    term=self._current_term, success=False
-                )
-
+            # Same term
+            assert (
+                self._leader_id is None or self._leader_id == request.leaderId
+            )  # sanity
+            assert self._role != ServerRole.LEADER  # sanity
+            # If was candidate and heard from a leader, step down
             if self._role == ServerRole.CANDIDATE:
                 self._role = ServerRole.FOLLOWER
-
             self._leader_id = request.leaderId
             self._reset_election_timer()
 
             # Check log consistency
-            logger.debug("Server {0} checking log consistency")
+            logger.debug("Server checking log consistency")
             if request.prevLogIndex > 0:
-                if (
-                    request.prevLogIndex >= len(self._log)
-                    or self._log[request.prevLogIndex].term != request.prevLogTerm
-                ):
+                if request.prevLogIndex >= len(self._log):
                     logger.debug(
                         f"Inconsistency found: {request.prevLogIndex} {len(self._log)}"
+                    )
+                    return raft_pb2.AppendEntriesReply(
+                        term=self._current_term, success=False
+                    )
+                elif self._log[request.prevLogIndex].term != request.prevLogTerm:
+                    logger.debug(
+                        f"Inconsistency found: {self._log[request.prevLogIndex].term} {request.prevLogTerm}"
                     )
                     return raft_pb2.AppendEntriesReply(
                         term=self._current_term, success=False
@@ -280,6 +288,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
             # Append new entries
             for i, entry in enumerate(request.entries):
+                logger.debug(f"Need to append log entry {entry}")
                 log_index = request.prevLogIndex + i + 1
                 if log_index < len(self._log):
                     # Remove conflicting entry and all that follow
@@ -289,16 +298,18 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     elif (
                         self._log[log_index] != entry
                     ):  # this branch is purely for debugging
-                        logger.debug(
-                            f"entries with same log_index and term must match, {self._log[log_index]}, {entry}"
-                        )
+                        # logger.debug(
+                        #     f"entries with same log_index and term must match, {self._log[log_index]}, {entry}"
+                        # )
+                        pass
                 else:
                     self._log.append(entry)
-            logger.debug(f"append new entries finished")
+            # logger.debug(f"append new entries finished")
 
             # Update commit index
             if request.leaderCommit > self._commit_index:
                 self._commit_index = min(request.leaderCommit, len(self._log) - 1)
+                logger.debug(f"Need to apply entries till {self._commit_index}")
                 self._apply_committed_entries()
 
             return raft_pb2.AppendEntriesReply(term=self._current_term, success=True)
@@ -307,42 +318,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         try:
             response = stub.AppendEntries(args)
             q.put((server_id, response, None, args))  # TODO: Use an object not tuple
-            logger.debug(f"sent AppendEntry request to {server_id} with {args}")
         except Exception as e:
+            logger.debug(f"Sending {args} failed with exception {e}")
             q.put((server_id, None, e, args))
-
-    def _send_heartbeats(self):
-        """Periodically send AppendEntries to all peers while leader."""
-        while True:
-            with self._state_lock:
-                if self._role != ServerRole.LEADER:
-                    return
-                term = self._current_term
-
-            # Send AppendEntries in parallel (outside lock)
-            result_queue = queue.Queue()
-            for server_id, channel in self._channels.items():
-                stub = raft_pb2_grpc.KeyValueStoreStub(channel)
-                args = raft_pb2.AppendEntriesArgs(
-                    term=term,
-                    leaderId=self._server_id,
-                )
-                threading.Thread(
-                    target=self._send_append_entry,
-                    args=(stub, args, server_id, result_queue),
-                ).start()
-
-            for _ in range(len(self._channels)):
-                server_id, response, error, _ = result_queue.get()
-                if error:
-                    continue
-                with self._state_lock:
-                    if response.term > self._current_term:
-                        self._on_higher_term_discovery(response.term)
-                        return  # No longer leader
-
-            logger.debug(f"{self._server_id} sleeping now for 50ms.")
-            threading.Event().wait(0.50)
 
     def _replicate_to_followers(self):
         """Periodically send AppendEntries to all peers while leader, also serving as heartbeat."""
@@ -353,16 +331,11 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 with self._state_lock:  # take lock only for preparing args
                     if self._role != ServerRole.LEADER:
                         return
-                    
-                    if follower_id not in self._next_index:
-                        self._next_index[follower_id] = len(self._log)
-
                     next_index = self._next_index[follower_id]
                     prevLogIndex = next_index - 1
-                    if prevLogIndex > 0:
-                        prevLogTerm = self._log[prevLogIndex].term
-                    else:
-                        prevLogTerm = 0
+                    prevLogTerm = (
+                        self._log[prevLogIndex].term if prevLogIndex > 0 else 0
+                    )
                     entries = (
                         self._log[next_index:] if next_index < len(self._log) else []
                     )
@@ -426,12 +399,12 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                         else:
                             break
 
-            logger.debug(f"{self._server_id} sleeping now for 50ms.")
-            threading.Event().wait(0.05)
+            # logger.debug(f"{self._server_id} sleeping now for 15ms between heartbeats")
+            threading.Event().wait(0.015)
 
     def Put(self, request: raft_pb2.KeyValue, context):
         """Handle client PUT request"""
-        logger.debug(f"Put request received {request}")
+        # logger.debug(f"Put request received {request}")
         with self._state_lock:
             if self._role != ServerRole.LEADER:
                 return raft_pb2.GenericResponse(success=False, error="Not leader")
@@ -447,9 +420,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             # Append to log
             self._log.append(entry)
             log_index = len(self._log) - 1
-            logger.debug(f"Inserted entry {entry} to log at index {log_index}")
+            # logger.debug(f"Inserted entry {entry} to log at index {log_index}")
 
-        start_time = time.time()
+        # Check on commitIndex sleeping in between
+        # TODO: Better to check only when leadership status has changed or self._commit_index advances
         while True:
             with self._state_lock:
                 if self._role != ServerRole.LEADER:
@@ -458,13 +432,8 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 if self._commit_index >= log_index:
                     logger.debug(f"Put request success")
                     return raft_pb2.GenericResponse(success=True)
-                if time.time() - start_time > 10:
-                    logger.debug(f"Put request timed out waiting for commit {request}")
-                    return raft_pb2.GenericResponse(
-                        success=False, error="Timeout waiting for commit"
-                    )
 
-            logger.debug(f"{self._server_id} sleeping now for 50ms.")
+            # logger.debug(f"{self._server_id} sleeping now for 50ms.")
             threading.Event().wait(0.05)
 
     def Get(self, request, context):
