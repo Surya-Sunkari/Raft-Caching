@@ -3,18 +3,20 @@
     "command": ["python3", "frontend.py"],
     "working_dir": ".",
     "env": {
-      "PYTHONPATH": "."
+      "PYTHONPATH": ".",
+      "PYTHONUNBUFFERED": "1"
     },
-    "process_name_pattern": "frontend",
+    "process_name_pattern": "frontend.py",
     "startup_timeout": 30
   },
   "server": {
     "command_template": ["python3", "server.py", "{server_id}"],
     "working_dir": ".",
     "env": {
-      "PYTHONPATH": "."
+      "PYTHONPATH": ".",
+      "PYTHONUNBUFFERED": "1"
     },
-    "process_name_pattern": "server",
+    "process_name_pattern": "server.py",
     "startup_timeout": 10
   },
   "ports": {
@@ -26,6 +28,13 @@
     "startup_wait": 5,
     "server_ready_timeout": 20,
     "leader_election_timeout": 15,
-    "replication_timeout": 10
+    "replication_timeout": 10,
+    "commit_timeout": 10,
+    "recovery_timeout": 25,
+    "failover_timeout": 30,
+    "persistence_recovery_timeout": 30
+  },
+  "persistence": {
+    "state_dir": "raft_state"
   }
 }

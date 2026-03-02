@@ -17,3 +17,10 @@ def get_active_servers():
     active_str = config.get("Servers", "active")  # Gets "0,1,2,3,4"
     active_ids = [int(id.strip()) for id in active_str.split(",")]
     return active_ids
+
+
+def get_persistent_state_path() -> str:
+    """Return the directory where Raft server state should be stored."""
+    config = configparser.ConfigParser()
+    config.read("config.ini")
+    return config.get("Servers", "persistent_state_path", fallback="memory")
