@@ -414,15 +414,14 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                             )
                     # Attempt to advance commit index following Raft's commit rule:
                     # only commit log entries from the current term directly.
-                    while True:
-                        candidate_index = self._commit_index + 1
-                        if candidate_index >= len(self._log):
-                            break
-
+                    # When an entry from current term commits, all prior entries
+                    # are committed indirectly (Raft Figure 8).
+                    for candidate_index in range(self._commit_index + 1, len(self._log)):
                         # Only consider entries from the current term for direct commit
                         if self._log[candidate_index].term != self._current_term:
-                            break
+                            continue  # Skip entries from old terms
 
+                        # Check if this entry is replicated on majority
                         count = 0
                         for sid in self._active_servers:
                             if sid == self._server_id:
@@ -432,10 +431,10 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                                 count += 1
 
                         if count > (len(self._active_servers) // 2):
+                            # Commit this entry and all prior entries
                             self._commit_index = candidate_index
                             self._apply_committed_entries()
-                        else:
-                            break
+                        # Don't break - check next entries too
 
             # logger.debug(f"{self._server_id} sleeping now for 15ms between heartbeats")
             threading.Event().wait(0.015)
