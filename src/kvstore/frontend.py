@@ -80,6 +80,16 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
         try:
             # Kill any existing servers first
             self._kill_all_servers()
+            # Clear persistent state directory for a fresh cluster start
+            state_dir = utils.get_persistent_state_path()
+            if state_dir != "memory" and os.path.exists(state_dir):
+                # Remove entire directory with all server state files
+                import shutil
+
+                shutil.rmtree(state_dir)
+            if state_dir != "memory":
+                os.makedirs(state_dir, exist_ok=True)
+
             # Start all the servers
             for server_id in range(num_servers):
                 self._start_server(server_id)
