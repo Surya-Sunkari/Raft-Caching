@@ -5,6 +5,8 @@ import queue
 import random
 import sys
 import threading
+import os
+import json
 from concurrent import futures
 from typing import List, Optional, Any
 
@@ -41,6 +43,16 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         self._last_applied = 0
         self._state_machine = {}  # In-memory key-value store
         self._next_index = {}  # Leader specific
+
+        # Persistence configuration
+        self._state_dir = utils.get_persistent_state_path()
+        self._state_file: Optional[str] = None
+        if self._state_dir != "memory":
+            os.makedirs(self._state_dir, exist_ok=True)
+            self._state_file = os.path.join(
+                self._state_dir, f"server_{self._server_id}.json"
+            )
+            self._load_state()
 
         # Channels
         self._active_servers = utils.get_active_servers()
@@ -93,6 +105,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             # TODO: Verify that _reset_election_timer should be called here
             self._reset_election_timer()
             self._next_index.clear()
+            self._persist_state()
 
     def RequestVote(self, request, context):
         """A candidate is requesting a vote in this server"""
@@ -123,6 +136,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     ):
                         self._voted_for = candidate_id
                         self._reset_election_timer()
+                        self._persist_state()
                         return raft_pb2.RequestVoteReply(
                             term=self._current_term, voteGranted=True
                         )
@@ -173,6 +187,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
             # Reset election timer so a new election starts if this one fails
             self._reset_election_timer()
+            self._persist_state()
 
         # Launch vote request calls in parallel (outside lock)
         result_queue = queue.Queue()
@@ -287,6 +302,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     )
 
             # Append new entries
+            log_changed = False
             for i, entry in enumerate(request.entries):
                 logger.debug(f"Need to append log entry {entry}")
                 log_index = request.prevLogIndex + i + 1
@@ -295,6 +311,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     if self._log[log_index].term != entry.term:
                         self._log = self._log[:log_index]
                         self._log.append(entry)
+                        log_changed = True
                     elif (
                         self._log[log_index] != entry
                     ):  # this branch is purely for debugging
@@ -304,6 +321,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                         pass
                 else:
                     self._log.append(entry)
+                    log_changed = True
             # logger.debug(f"append new entries finished")
 
             # Update commit index
@@ -311,6 +329,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                 self._commit_index = min(request.leaderCommit, len(self._log) - 1)
                 logger.debug(f"Need to apply entries till {self._commit_index}")
                 self._apply_committed_entries()
+
+            if log_changed:
+                self._persist_state()
 
             return raft_pb2.AppendEntriesReply(term=self._current_term, success=True)
 
@@ -421,6 +442,7 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             self._log.append(entry)
             log_index = len(self._log) - 1
             # logger.debug(f"Inserted entry {entry} to log at index {log_index}")
+            self._persist_state()
 
         # Check on commitIndex sleeping in between
         # TODO: Better to check only when leadership status has changed or self._commit_index advances
@@ -442,6 +464,71 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             key = request.arg  # StringArg has .arg field
             value = self._state_machine.get(key, "")  # Empty string for missing keys
             return raft_pb2.KeyValue(key=key, value=value)
+
+    def _persist_state(self) -> None:
+        """Persist currentTerm, votedFor, and log[] to disk atomically."""
+        if not self._state_file or self._state_dir == "memory":
+            return
+
+        # Serialize log entries (skip index 0 sentinel)
+        log_data = []
+        for entry in self._log[1:]:
+            log_data.append(
+                {
+                    "term": entry.term,
+                    "key": entry.key,
+                    "value": entry.value,
+                    "clientId": entry.clientId,
+                    "requestId": entry.requestId,
+                }
+            )
+
+        state = {
+            "currentTerm": self._current_term,
+            "votedFor": self._voted_for,
+            "log": log_data,
+        }
+
+        temp_file = f"{self._state_file}.tmp"
+        try:
+            with open(temp_file, "w") as f:
+                json.dump(state, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, self._state_file)
+        except Exception as e:
+            logger.error(f"Failed to persist state to {self._state_file}: {e}")
+
+    def _load_state(self) -> None:
+        """Load persistent state from disk if available."""
+        if not self._state_file or self._state_dir == "memory":
+            return
+
+        if not os.path.exists(self._state_file):
+            return
+
+        try:
+            with open(self._state_file, "r") as f:
+                state = json.load(f)
+
+            self._current_term = int(state.get("currentTerm", 0))
+            voted_for = state.get("votedFor", None)
+            self._voted_for = int(voted_for) if voted_for is not None else None
+
+            # Rebuild log with sentinel at index 0
+            self._log = [None]  # type: ignore
+            for entry_dict in state.get("log", []):
+                self._log.append(
+                    raft_pb2.LogEntry(
+                        term=int(entry_dict.get("term", 0)),
+                        key=entry_dict.get("key", ""),
+                        value=entry_dict.get("value", ""),
+                        clientId=int(entry_dict.get("clientId", 0)),
+                        requestId=int(entry_dict.get("requestId", 0)),
+                    )
+                )
+        except Exception as e:
+            logger.error(f"Failed to load state from {self._state_file}: {e}")
 
 
 def serve(server_id):
