@@ -230,22 +230,30 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     continue
                 else:  # vote granted
                     votes.add(server_id)
-                    # logger.debug(
-                    #     f"{self._server_id} received vote from peer {server_id} for term {self._current_term}, total votes: {len(votes)}"
-                    # )
                     if len(votes) > len(active_servers) // 2:
-                        # logger.debug(
-                        #     f"Server {self._server_id} elected as leader for term {self._current_term}"
-                        # )
+                        # Become leader for this term
                         self._role = ServerRole.LEADER
                         self._leader_id = self._server_id
                         self._reset_election_timer()
-                        # Bootstrap self.next_indexes
+
+                        # Immediately append a no-op entry (Raft 5.4.3)
+                        noop_entry = raft_pb2.LogEntry(
+                            term=self._current_term,
+                            key="",
+                            value="",
+                            clientId=0,
+                            requestId=0,
+                        )
+                        self._log.append(noop_entry)
+                        self._persist_state()
+
+                        # Bootstrap self.next_indexes (after appending no-op)
                         self._next_index.clear()
                         for server_id in self._active_servers:
                             if server_id == self._server_id:
                                 continue
                             self._next_index[server_id] = len(self._log)
+
                         # Start sending append_entries to followers
                         threading.Thread(
                             target=self._replicate_to_followers, daemon=True
@@ -257,8 +265,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         while self._last_applied < self._commit_index:
             self._last_applied += 1
             entry = self._log[self._last_applied]
-            # Apply to state machine using key and value from LogEntry
-            self._state_machine[entry.key] = entry.value
+            # Skip no-op entries (used for committing prior terms)
+            if entry.key != "":
+                self._state_machine[entry.key] = entry.value
             logger.debug(f"Applied {entry}")
 
     def AppendEntries(self, request: raft_pb2.AppendEntriesArgs, context):
@@ -403,20 +412,28 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                             logger.error(
                                 f"nextIndex value {self._next_index[server_id]} less than 1 for follower {server_id}"
                             )
-                    # Attempt to increase commit index
+                    # Attempt to advance commit index following Raft's commit rule:
+                    # only commit log entries from the current term directly.
                     while True:
+                        candidate_index = self._commit_index + 1
+                        if candidate_index >= len(self._log):
+                            break
+
+                        # Only consider entries from the current term for direct commit
+                        if self._log[candidate_index].term != self._current_term:
+                            break
+
                         count = 0
-                        for server_id in self._active_servers:
-                            if server_id == self._server_id:
-                                if len(self._log) > self._commit_index + 1:
+                        for sid in self._active_servers:
+                            if sid == self._server_id:
+                                if len(self._log) > candidate_index:
                                     count += 1
-                            elif self._next_index[server_id] > (self._commit_index + 1):
+                            elif self._next_index.get(sid, 1) > candidate_index:
                                 count += 1
+
                         if count > (len(self._active_servers) // 2):
-                            self._commit_index += 1
-                            entry = self._log[self._commit_index]
-                            self._state_machine[entry.key] = entry.value
-                            self._last_applied = self._commit_index
+                            self._commit_index = candidate_index
+                            self._apply_committed_entries()
                         else:
                             break
 
