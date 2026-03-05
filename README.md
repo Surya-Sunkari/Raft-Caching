@@ -25,6 +25,8 @@ source .venv/bin/activate
 cd src/kvstore
 python a1_tests.py  # Infrastructure tests
 python a2_tests.py  # Key-value store tests
-python a3_tests.py  # Key-value store tests
-python a4_tests.py  # Key-value store tests
+python a3_tests.py  # Leader election tests
+python a4_tests.py  # Log replication tests
+python a5_tests.py  # Fault-tolerance
+python a5_tests.py  # State persistence
 ```

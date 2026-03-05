@@ -416,7 +416,9 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
                     # only commit log entries from the current term directly.
                     # When an entry from current term commits, all prior entries
                     # are committed indirectly (Raft Figure 8).
-                    for candidate_index in range(self._commit_index + 1, len(self._log)):
+                    for candidate_index in range(
+                        self._commit_index + 1, len(self._log)
+                    ):
                         # Only consider entries from the current term for direct commit
                         if self._log[candidate_index].term != self._current_term:
                             continue  # Skip entries from old terms
@@ -483,9 +485,12 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
     def _persist_state(self) -> None:
         """Persist currentTerm, votedFor, and log[] to disk atomically."""
-        if not self._state_file or self._state_dir == "memory":
+        if self._state_dir == "memory":
             return
 
+        assert self._state_file is not None, (
+            f"State file is a must if state_dir is {self._state_dir}"
+        )
         # Serialize log entries (skip index 0 sentinel)
         log_data = []
         for entry in self._log[1:]:
@@ -517,9 +522,12 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
 
     def _load_state(self) -> None:
         """Load persistent state from disk if available."""
-        if not self._state_file or self._state_dir == "memory":
+        if self._state_dir == "memory":
             return
 
+        assert self._state_file is not None, (
+            f"State file is a must if state_dir is {self._state_dir}"
+        )
         if not os.path.exists(self._state_file):
             return
 
@@ -536,11 +544,11 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             for entry_dict in state.get("log", []):
                 self._log.append(
                     raft_pb2.LogEntry(
-                        term=int(entry_dict.get("term", 0)),
-                        key=entry_dict.get("key", ""),
-                        value=entry_dict.get("value", ""),
-                        clientId=int(entry_dict.get("clientId", 0)),
-                        requestId=int(entry_dict.get("requestId", 0)),
+                        term=int(entry_dict.get("term")),
+                        key=entry_dict.get("key"),
+                        value=entry_dict.get("value"),
+                        clientId=int(entry_dict.get("clientId")),
+                        requestId=int(entry_dict.get("requestId")),
                     )
                 )
         except Exception as e:

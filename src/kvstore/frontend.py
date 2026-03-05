@@ -2,6 +2,7 @@ import queue
 import threading
 import grpc
 import os
+import shutil
 import subprocess
 from concurrent import futures
 
@@ -82,13 +83,11 @@ class FrontEndServicer(raft_pb2_grpc.FrontEndServicer):
             self._kill_all_servers()
             # Clear persistent state directory for a fresh cluster start
             state_dir = utils.get_persistent_state_path()
-            if state_dir != "memory" and os.path.exists(state_dir):
-                # Remove entire directory with all server state files
-                import shutil
-
-                shutil.rmtree(state_dir)
             if state_dir != "memory":
-                os.makedirs(state_dir, exist_ok=True)
+                # Remove entire directory with all server state files
+                if os.path.exists(state_dir):
+                    shutil.rmtree(state_dir)
+                os.makedirs(state_dir, exist_ok=True)  # create an empty
 
             # Start all the servers
             for server_id in range(num_servers):
