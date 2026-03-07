@@ -26,19 +26,11 @@ def get_persistent_state_path() -> str:
     return config.get("Servers", "persistent_state_path", fallback="memory")
 
 
-def get_cache_policy() -> str:
+def get_cache_config() -> dict:
     config = configparser.ConfigParser()
     config.read("config.ini")
-    return config.get("Cache", "policy", fallback="none")
-
-
-def get_cache_capacity() -> int:
-    config = configparser.ConfigParser()
-    config.read("config.ini")
-    return config.getint("Cache", "capacity", fallback=0)
-
-
-def get_cache_write_strategy() -> str:
-    config = configparser.ConfigParser()
-    config.read("config.ini")
-    return config.get("Cache", "write_strategy", fallback="write_through")
+    return {
+        "policy": config.get("Cache", "policy", fallback="none"),
+        "capacity": config.getint("Cache", "capacity", fallback=0),
+        "write_strategy": config.get("Cache", "write_strategy", fallback="write_through"),
+    }

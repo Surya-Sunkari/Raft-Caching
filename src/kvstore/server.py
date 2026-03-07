@@ -7,6 +7,7 @@ import sys
 import threading
 import os
 import json
+from cache import create_cache
 from concurrent import futures
 from typing import List, Optional, Any
 
@@ -43,6 +44,19 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         self._last_applied = 0
         self._state_machine = {}  # In-memory key-value store
         self._next_index = {}  # Leader specific
+
+        # Cache configuration
+        cache_config = utils.get_cache_config()
+        write_strategy, cache_capacity, cache_policy = (
+            cache_config["write_strategy"],
+            cache_config["capacity"],
+            cache_config["policy"],
+        )
+        self._cache_write_strategy = write_strategy
+        if cache_policy != "none" and cache_capacity > 0:
+            self._cache = create_cache(cache_policy, cache_capacity)
+        else:
+            self._cache = None
 
         # Persistence configuration
         self._state_dir = utils.get_persistent_state_path()
@@ -268,6 +282,11 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
             # Skip no-op entries (used for committing prior terms)
             if entry.key != "":
                 self._state_machine[entry.key] = entry.value
+                if self._cache is not None:
+                    if self._cache_write_strategy == "write_through":
+                        self._cache.put(entry.key, entry.value)
+                    else:
+                        self._cache.invalidate(entry.key)
             logger.debug(f"Applied {entry}")
 
     def AppendEntries(self, request: raft_pb2.AppendEntriesArgs, context):
@@ -480,7 +499,17 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         """Handle client GET request - all servers can serve reads"""
         with self._state_lock:
             key = request.arg  # StringArg has .arg field
+
+            # check if in cache first
+            if self._cache is not None:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    return raft_pb2.KeyValue(key=key, value=cached)
+                
+            # either cache miss or no cache, read from state machine
             value = self._state_machine.get(key, "")  # Empty string for missing keys
+            if self._cache is not None and key in self._state_machine:
+                self._cache.put(key, value)
             return raft_pb2.KeyValue(key=key, value=value)
 
     def _persist_state(self) -> None:
