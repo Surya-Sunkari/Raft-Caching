@@ -4,11 +4,11 @@ Each step below is self-contained and testable. Complete them in order.
 
 ---
 
-## Step 1: Cache Interface & 6 Eviction Policies
+## Step 1: Cache Interface & 5 Core Eviction Policies
 
 **Create `src/kvstore/cache.py`**
 
-Define the abstract base class and all non-ML policies:
+Define the abstract base class and core policies:
 
 | Class | Data Structures | Eviction Logic |
 |-------|----------------|----------------|
@@ -17,8 +17,9 @@ Define the abstract base class and all non-ML policies:
 | `FIFOEviction` | `dict` + `collections.deque` | `deque.popleft()` — insertion order, no reordering on access |
 | `LRUEviction` | `OrderedDict` | `move_to_end(key)` on access, `popitem(last=False)` to evict |
 | `LFUEviction` | `dict` + freq counters + `dict[int, OrderedDict]` freq buckets + `min_freq` | Pop LRU key from `freq_buckets[min_freq]` |
-| `SLRUEviction` | Two `OrderedDict`s (probation + protected) | New keys enter probation. On re-access, promote to protected. Evict from probation front. Protected overflow demotes to probation. |
-| `SIEVEEviction` | Doubly-linked list (`_Node` with prev/next/key/value/visited) + `dict` + hand pointer | Advance hand; skip visited nodes (clear their bit). Evict first unvisited. |
+| `SLRUEviction` | Two `OrderedDict`s (probation + protected) | New keys enter probation. On re-access, promote to protected. Evict from probation front. Protected overflow demotes to probation. Default `protected_ratio=0.8` hardcoded in constructor. |
+
+SIEVE and MAT policies are added in Steps 9 and 10 respectively.
 
 Key interface:
 - `get(key) -> Optional[str]` — `None` = miss, `""` = valid cached empty string
@@ -28,7 +29,7 @@ Key interface:
 - `stats` — `CacheStats` with hits, misses, evictions, invalidations, current_size
 - `create_cache(policy_name, capacity, **kwargs)` — factory function
 
-**Done when:** You can instantiate each policy, do puts up to capacity, verify eviction happens, and `stats` are correct.
+**Done when:** You can instantiate all 5 policies, do puts up to capacity, verify eviction happens, and `stats` are correct.
 
 ---
 
@@ -37,19 +38,18 @@ Key interface:
 **Modify `src/kvstore/config.ini`** — add:
 ```ini
 [Cache]
-policy =
+policy = none
 capacity = 0
 write_strategy = write_through
-slru_protected_ratio = 0.8
 ```
-Default: disabled (empty policy, capacity 0).
+Default: disabled (`policy = none`, capacity 0). Policy-specific parameters (e.g., SLRU's `protected_ratio`) are hardcoded defaults in the policy constructors, not exposed in config.
 
 **Modify `src/kvstore/utils.py`** — add:
 - `get_cache_policy() -> str`
 - `get_cache_capacity() -> int`
 - `get_cache_write_strategy() -> str`
 
-**Done when:** Calling these functions returns the config values. Empty/0 defaults mean "no cache."
+**Done when:** Calling these functions returns the config values. `policy = none` or `capacity = 0` means "no cache."
 
 ---
 
@@ -62,7 +62,7 @@ Default: disabled (empty policy, capacity 0).
 cache_policy = utils.get_cache_policy()
 cache_capacity = utils.get_cache_capacity()
 self._cache_write_strategy = utils.get_cache_write_strategy()
-if cache_policy and cache_capacity > 0:
+if cache_policy != "none" and cache_capacity > 0:
     from cache import create_cache
     self._cache = create_cache(cache_policy, cache_capacity)
 else:
@@ -78,9 +78,10 @@ if self._cache is not None:
         return raft_pb2.KeyValue(key=key, value=cached)
 # Cache miss — read from state machine
 value = self._state_machine.get(key, "")
-if self._cache is not None:
+if self._cache is not None and key in self._state_machine:
     self._cache.put(key, value)
 ```
+Note: only cache keys that actually exist in `_state_machine` to avoid filling the cache with empty-string entries for non-existent keys.
 
 ### 3c. _apply_committed_entries (after line 270: `self._state_machine[entry.key] = entry.value`)
 ```python
@@ -142,10 +143,10 @@ Test each policy for:
 - Invalidate removes entry, next get returns None
 - Clear empties cache
 - Stats tracking (hit_rate, eviction count)
-- Policy-specific: LRU evicts least recent, LFU evicts least frequent, SLRU promotes on re-access, SIEVE hand behavior
+- Policy-specific: LRU evicts least recent, LFU evicts least frequent, SLRU promotes on re-access
 - Edge cases: capacity=1, empty string values, overwrite existing key
 
-**Done when:** All tests pass for all 6 policies.
+**Done when:** All tests pass for all 5 core policies. (SIEVE and MAT tests added in Steps 9–10.)
 
 ---
 
@@ -198,13 +199,28 @@ Output:
 - CSV export for all results
 - Matplotlib comparison charts (hit rate by policy, latency CDF, throughput bars)
 
-Run matrix: 6 policies x 6 workloads x 3 capacities (50, 100, 500).
+Run matrix: 5 policies x 6 workloads x 3 capacities (50, 100, 500). SIEVE and MAT are added to the matrix after Steps 9–10.
 
-**Done when:** `python benchmark.py` produces CSV + charts comparing all policies.
+**Done when:** `python benchmark.py` produces CSV + charts comparing all 5 core policies.
 
 ---
 
-## Step 9: MAT Policy (ML-based) — Deferred
+## Step 9: SIEVE Eviction Policy
+
+**Add `SIEVEEviction` to `src/kvstore/cache.py`**
+
+| Class | Data Structures | Eviction Logic |
+|-------|----------------|----------------|
+| `SIEVEEviction` | Doubly-linked list (`_Node` with prev/next/key/value/visited) + `dict` + hand pointer | Advance hand; skip visited nodes (clear their bit). Evict first unvisited. |
+
+- Register as `"sieve"` in `create_cache` factory
+- Add SIEVE-specific tests to `cache_tests.py` (hand advancement, visited-bit clearing)
+
+**Done when:** SIEVE passes all common + policy-specific tests and works in the benchmark harness.
+
+---
+
+## Step 10: MAT Policy (ML-based)
 
 **Create `src/kvstore/mat_cache.py`**
 
@@ -214,12 +230,13 @@ Run matrix: 6 policies x 6 workloads x 3 capacities (50, 100, 500).
 - Features: access count, time since last access, time since insertion
 - Training: online learning from observed access patterns
 - Register in `cache.py` factory function
+- Add MAT-specific tests to `cache_tests.py`
 
 **Done when:** MAT policy works in unit tests and benchmark harness. Compare against other policies.
 
 ---
 
-## Step 10: Failure Case Analysis & Mitigation
+## Step 11: Failure Case Analysis & Mitigation
 
 Run benchmarks and document failures:
 
