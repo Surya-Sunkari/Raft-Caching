@@ -29,12 +29,28 @@ python a3_tests.py  # Leader election tests
 python a4_tests.py  # Log replication tests
 python a5_tests.py  # Fault-tolerance tests
 python a6_tests.py  # State persistence tests
-python -m unittest cache_tests -v  # Cache eviction policy tests
+python -m unittest cache_tests -v  # Cache eviction policy unit tests
+python cache_integration_test.py   # Cache + Raft integration test (requires cache enabled in config.ini)
 ```
 
-## Cache Eviction Policies
+## Cache Layer
 
-The project includes a pluggable cache layer (`src/kvstore/cache.py`) with the following eviction policies:
+The project includes a pluggable cache layer integrated into the Raft KV store. Each server optionally maintains a local cache in front of its state machine.
+
+### Configuration
+
+Cache settings live in `src/kvstore/config.ini` under `[Cache]`:
+
+```ini
+[Cache]
+policy = none       # none, random, fifo, lru, lfu, slru
+capacity = 0        # max entries (0 = disabled)
+write_strategy = write_through  # write_through or write_invalidate
+```
+
+Set `policy` to a policy name and `capacity > 0` to enable caching.
+
+### Eviction Policies
 
 | Policy | Description |
 |--------|-------------|
@@ -44,7 +60,17 @@ The project includes a pluggable cache layer (`src/kvstore/cache.py`) with the f
 | `lfu` | Evicts the least frequently used key (LRU tiebreak) |
 | `slru` | Segmented LRU with probation and protected segments |
 
-Usage:
+### Write Strategies
+
+- **`write_through`** — on log apply, the new value is pushed into the cache immediately
+- **`write_invalidate`** — on log apply, the stale cache entry is removed; next Get repopulates it
+
+### Cache Stats
+
+Each server exposes a `GetCacheStats` gRPC endpoint returning hits, misses, evictions, invalidations, current size, capacity, and hit rate.
+
+### Usage (standalone)
+
 ```python
 from cache import create_cache
 
