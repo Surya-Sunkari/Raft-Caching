@@ -81,6 +81,17 @@ message LogEntry {
     int32 requestId = 5;
 }
 
+// Cache stats
+message CacheStatsResponse {
+    int64 hits = 1;
+    int64 misses = 2;
+    int64 evictions = 3;
+    int64 invalidations = 4;
+    int64 current_size = 5;
+    int64 capacity = 6;
+    double hit_rate = 7;
+}
+
 // Frontend service
 service FrontEnd {
     rpc StartRaft(IntegerArg) returns (Reply);
@@ -102,4 +113,7 @@ service KeyValueStore {
     // Raft RPCs (Assignment 3+)
     rpc AppendEntries(AppendEntriesArgs) returns (AppendEntriesReply);
     rpc RequestVote(RequestVoteArgs) returns (RequestVoteReply);
+
+    // Cache stats
+    rpc GetCacheStats(Empty) returns (CacheStatsResponse);
 }

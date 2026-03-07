@@ -81,6 +81,16 @@ class KeyValueStoreServicer(raft_pb2_grpc.KeyValueStoreServicer):
         """Health check endpoint"""
         return raft_pb2.GenericResponse(success=True)
 
+    def GetCacheStats(self, request, context):
+        """Return cache statistics for this server"""
+        if self._cache:
+            s = self._cache.stats
+            return raft_pb2.CacheStatsResponse(
+                hits=s.hits, misses=s.misses, evictions=s.evictions,
+                invalidations=s.invalidations, current_size=s.current_size,
+                capacity=s.capacity, hit_rate=s.hit_rate)
+        return raft_pb2.CacheStatsResponse()
+
     def GetState(self, request, context):
         """Return current server state including commit index"""
         with self._state_lock:
