@@ -123,6 +123,7 @@ class TestCommonBehavior(unittest.TestCase):
             c = create_cache(name, 10)
             c.put("a", "")
             self.assertEqual(c.get("a"), "")
+            self.assertEqual(c.stats.hits, 1)
         self._run_for_all(check)
 
     def test_capacity_one(self):
@@ -159,6 +160,47 @@ class TestCommonBehavior(unittest.TestCase):
             self.assertEqual(c.stats.current_size, 3)
             self.assertEqual(c.stats.evictions, 0)
         self._run_for_all(check)
+
+    def test_reuse_after_clear(self):
+        def check(name):
+            c = create_cache(name, 3)
+            c.put("a", "1")
+            c.put("b", "2")
+            c.put("c", "3")
+            c.clear()
+            c.put("x", "10")
+            c.put("y", "20")
+            c.put("z", "30")
+            self.assertEqual(c.get("x"), "10")
+            self.assertEqual(c.stats.current_size, 3)
+            evicted = c.put("w", "40")
+            self.assertIsNotNone(evicted)
+            self.assertIn(evicted, ["x", "y", "z"])
+            self.assertEqual(c.stats.evictions, 1)
+        self._run_for_all(check)
+
+
+class TestRandomEviction(unittest.TestCase):
+    def test_evicted_key_was_in_cache(self):
+        c = create_cache("random", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        evicted = c.put("d", "4")
+        self.assertIn(evicted, ["a", "b", "c"])
+        self.assertIsNone(c.get(evicted))
+        self.assertEqual(c.get("d"), "4")
+
+    def test_multiple_evictions(self):
+        c = create_cache("random", 2)
+        c.put("a", "1")
+        c.put("b", "2")
+        for i in range(20):
+            evicted = c.put(f"key_{i}", f"val_{i}")
+            self.assertIsNotNone(evicted)
+            self.assertIsNone(c.get(evicted))
+        self.assertEqual(c.stats.current_size, 2)
+        self.assertEqual(c.stats.evictions, 20)
 
 
 class TestFIFOEviction(unittest.TestCase):
@@ -215,6 +257,17 @@ class TestLRUEviction(unittest.TestCase):
         evicted = c.put("d", "4")
         self.assertEqual(evicted, "b")
 
+    def test_sequential_evictions_with_interleaved_access(self):
+        c = create_cache("lru", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("a")  # order: b, c, a
+        c.get("b")  # order: c, a, b
+        self.assertEqual(c.put("d", "4"), "c")  # order: a, b, d
+        c.get("a")  # order: b, d, a
+        self.assertEqual(c.put("e", "5"), "b")  # order: d, a, e
+
 
 class TestLFUEviction(unittest.TestCase):
     def test_evicts_least_frequent(self):
@@ -244,6 +297,32 @@ class TestLFUEviction(unittest.TestCase):
         c.put("a", "updated")  # "a" freq bumps to 2
         evicted = c.put("d", "4")
         self.assertEqual(evicted, "b")  # "b" now has lowest freq
+
+    def test_min_freq_correct_after_invalidate(self):
+        c = create_cache("lfu", 3)
+        c.put("a", "1")  # freq 1
+        c.put("b", "2")  # freq 1
+        c.put("c", "3")  # freq 1
+        c.get("b")  # freq: a=1, b=2, c=1
+        c.get("c")  # freq: a=1, b=2, c=2
+        c.invalidate("a")  # remove only key at min_freq=1
+        # Now insert "d" — should not crash and should evict correctly
+        evicted = c.put("d", "4")  # d has freq=1, new min_freq=1
+        self.assertIsNone(evicted)  # was below capacity after invalidate
+        # Fill to capacity and evict
+        evicted = c.put("e", "5")
+        self.assertEqual(evicted, "d")  # d has lowest freq (1)
+
+    def test_sequential_evictions(self):
+        c = create_cache("lfu", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("c")  # freq: a=1, b=1, c=2
+        # Evict "a" (freq=1, inserted first)
+        self.assertEqual(c.put("d", "4"), "a")
+        # freq: b=1, c=2, d=1. Evict "b" (freq=1, inserted before d)
+        self.assertEqual(c.put("e", "5"), "b")
 
 
 class TestSLRUEviction(unittest.TestCase):
@@ -283,6 +362,30 @@ class TestSLRUEviction(unittest.TestCase):
         c.get("c")  # promote c to protected -> demotes "a" back to probation
         self.assertIn("a", c._probation)
         self.assertIn("c", c._protected)
+
+    def test_put_update_in_protected(self):
+        c = create_cache("slru", 5)
+        c.put("a", "1")
+        c.get("a")  # promote to protected
+        self.assertIn("a", c._protected)
+        c.put("a", "updated")
+        self.assertEqual(c.get("a"), "updated")
+        self.assertIn("a", c._protected)
+
+    def test_invalidate_eviction_interaction(self):
+        c = create_cache("slru", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("b")  # promote b to protected
+        c.invalidate("a")  # remove from probation
+        # Should not evict since we have room
+        evicted = c.put("d", "4")
+        self.assertIsNone(evicted)
+        self.assertEqual(c.stats.current_size, 3)
+        # Now at capacity, should evict from probation
+        evicted = c.put("e", "5")
+        self.assertIn(evicted, ["c", "d"])
 
 
 if __name__ == "__main__":
