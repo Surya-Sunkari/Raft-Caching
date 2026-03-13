@@ -322,6 +322,11 @@ def run_tests():
     else:
         failed += 1
 
+    # Print final cache stats
+    final_stats = get_cache_stats(leader_id)
+    print(f"\nCache stats: hits={final_stats.hits}, misses={final_stats.misses}, "
+          f"evictions={final_stats.evictions}, hit_rate={final_stats.hit_rate:.2%}")
+
     print(f"\n{'='*40}")
     print(f"Results: {passed} passed, {failed} failed out of {passed + failed}")
     return failed == 0
