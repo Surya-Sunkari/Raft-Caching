@@ -90,8 +90,11 @@ print(cache.stats)      # CacheStats(hits=1, misses=0, ...)
 # Unit mode: drives cache.py directly (no network, fast)
 python benchmark.py
 
-# Integration mode: drives a real 5-server Raft cluster via gRPC (slow)
+# Integration mode: drives a real 5-server Raft cluster via gRPC, only uses a few policies and workloads
 python benchmark.py --mode integration
+
+# Run integration test for all policies and all workloads
+python benchmark.py --mode integration --policies random,fifo,lru,lfu,slru --workloads uniform,zipfian,hotkey 
 ```
 
 ### Workloads
