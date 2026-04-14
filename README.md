@@ -29,8 +29,9 @@ python a3_tests.py  # Leader election tests
 python a4_tests.py  # Log replication tests
 python a5_tests.py  # Fault-tolerance tests
 python a6_tests.py  # State persistence tests
-python -m unittest cache_tests -v  # Cache eviction policy unit tests
-python cache_integration_test.py   # Cache + Raft integration test (requires cache enabled in config.ini)
+python -m unittest cache_policy_tests -v  # Cache eviction policy unit tests
+python -m unittest workload_tests -v      # Workload generator unit tests
+python cache_integration_test.py          # Cache + Raft integration test (requires cache enabled in config.ini)
 ```
 
 ## Cache Layer
@@ -80,3 +81,29 @@ cache.get("key")        # returns "value"
 cache.invalidate("key") # returns True
 print(cache.stats)      # CacheStats(hits=1, misses=0, ...)
 ```
+
+## Benchmarking
+
+`benchmark.py` compares eviction policies under different workloads. Both modes are run from `src/kvstore/`:
+
+```bash
+# Unit mode: drives cache.py directly (no network, fast)
+python benchmark.py
+
+# Integration mode: drives a real 5-server Raft cluster via gRPC (slow)
+python benchmark.py --mode integration
+```
+
+### Workloads
+
+| Workload | Access pattern |
+|----------|----------------|
+| `uniform` | Keys drawn uniformly over `[0, num_keys)` |
+| `zipfian` | Power-law skew; `alpha` controls skew (default 1.1) |
+| `hotkey` | Small hot set receives `hot_fraction` of traffic |
+
+### Flags
+
+`--policies`, `--workloads`, `--capacities`, `--num-keys`, `--num-ops`, `--seed`, `--write-strategy`, `--output`. Unit mode writes `benchmark_results.csv`; integration mode writes `benchmark_integration_results.csv` and prints a hit-rate pivot table.
+
+Integration mode temporarily rewrites `config.ini`'s `[Cache]` section per (policy, capacity) combination and restores it on exit. It calls `StartRaft` between every workload so each run sees a fresh cache. Rule of thumb: make `num_keys` at least 3-4× the largest capacity so evictions actually happen.
