@@ -207,6 +207,8 @@ Run matrix: 5 policies x 6 workloads x 3 capacities (50, 100, 500). SIEVE and MA
 
 ## Step 9: SIEVE Eviction Policy
 
+**Status: implemented.** `SIEVEEviction` is registered as `"sieve"`, included in unit and integration benchmark policy lists, and covered by common + SIEVE-specific tests in `src/kvstore/cache_policy_tests.py`.
+
 **Add `SIEVEEviction` to `src/kvstore/cache.py`**
 
 | Class | Data Structures | Eviction Logic |
@@ -214,7 +216,7 @@ Run matrix: 5 policies x 6 workloads x 3 capacities (50, 100, 500). SIEVE and MA
 | `SIEVEEviction` | Doubly-linked list (`_Node` with prev/next/key/value/visited) + `dict` + hand pointer | Advance hand; skip visited nodes (clear their bit). Evict first unvisited. |
 
 - Register as `"sieve"` in `create_cache` factory
-- Add SIEVE-specific tests to `cache_tests.py` (hand advancement, visited-bit clearing)
+- Add SIEVE-specific tests to `cache_policy_tests.py` (hand advancement, visited-bit clearing)
 
 **Done when:** SIEVE passes all common + policy-specific tests and works in the benchmark harness.
 
