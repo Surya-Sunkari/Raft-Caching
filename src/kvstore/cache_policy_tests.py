@@ -10,9 +10,10 @@ from cache import (
     LRUEviction,
     LFUEviction,
     SLRUEviction,
+    SIEVEEviction,
 )
 
-ALL_POLICIES = ["random", "fifo", "lru", "lfu", "slru"]
+ALL_POLICIES = ["random", "fifo", "lru", "lfu", "slru", "sieve"]
 
 
 class TestCacheFactory(unittest.TestCase):
@@ -386,6 +387,71 @@ class TestSLRUEviction(unittest.TestCase):
         # Now at capacity, should evict from probation
         evicted = c.put("e", "5")
         self.assertIn(evicted, ["c", "d"])
+
+
+class TestSIEVEEviction(unittest.TestCase):
+    def test_factory_creates_sieve(self):
+        c = create_cache("sieve", 3)
+        self.assertIsInstance(c, SIEVEEviction)
+
+    def test_new_keys_insert_at_head(self):
+        c = create_cache("sieve", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        self.assertEqual(c._head.key, "c")
+        self.assertEqual(c._tail.key, "a")
+
+    def test_hit_sets_visited_without_reordering(self):
+        c = create_cache("sieve", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        self.assertEqual(c.get("a"), "1")
+        self.assertTrue(c._data["a"].visited)
+        self.assertEqual(c._head.key, "c")
+        self.assertEqual(c._tail.key, "a")
+
+    def test_eviction_skips_visited_and_clears_bit(self):
+        c = create_cache("sieve", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("a")
+
+        evicted = c.put("d", "4")
+
+        self.assertEqual(evicted, "b")
+        self.assertIn("a", c._data)
+        self.assertFalse(c._data["a"].visited)
+        self.assertEqual(c._hand.key, "c")
+
+    def test_eviction_wraps_when_all_entries_were_visited(self):
+        c = create_cache("sieve", 2)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.get("a")
+        c.get("b")
+
+        evicted = c.put("c", "3")
+
+        self.assertEqual(evicted, "a")
+        self.assertIn("b", c._data)
+        self.assertFalse(c._data["b"].visited)
+        self.assertEqual(c._hand.key, "b")
+
+    def test_invalidate_removes_hand_target(self):
+        c = create_cache("sieve", 3)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("a")
+        c.put("d", "4")  # evicts b, leaves hand on c
+
+        self.assertEqual(c._hand.key, "c")
+        self.assertTrue(c.invalidate("c"))
+        self.assertEqual(c._hand.key, "d")
+        self.assertEqual(c.stats.current_size, 2)
 
 
 if __name__ == "__main__":

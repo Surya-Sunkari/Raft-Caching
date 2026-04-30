@@ -369,6 +369,114 @@ class SLRUEviction(CachePolicy):
         self._stats.current_size = 0
 
 
+@dataclass
+class _SIEVENode:
+    key: str
+    value: str
+    visited: bool = False
+    # prev points toward newer entries, next points toward older entries.
+    prev: Optional["_SIEVENode"] = None
+    next: Optional["_SIEVENode"] = None
+
+
+class SIEVEEviction(CachePolicy):
+    """SIEVE eviction policy from NSDI '24.
+
+    New entries are inserted at the head. Hits only set a visited bit.
+    Eviction walks the hand from old entries toward new entries, clearing
+    visited bits until it finds an unvisited victim.
+    """
+
+    def __init__(self, capacity: int):
+        super().__init__(capacity)
+        self._data: dict[str, _SIEVENode] = {}
+        self._head: Optional[_SIEVENode] = None
+        self._tail: Optional[_SIEVENode] = None
+        self._hand: Optional[_SIEVENode] = None
+
+    def get(self, key: str) -> Optional[str]:
+        node = self._data.get(key)
+        if node is None:
+            self._stats.misses += 1
+            return None
+        self._stats.hits += 1
+        node.visited = True
+        return node.value
+
+    def put(self, key: str, value: str) -> Optional[str]:
+        node = self._data.get(key)
+        if node is not None:
+            node.value = value
+            node.visited = True
+            return None
+
+        evicted_key = None
+        if len(self._data) >= self._stats.capacity:
+            evicted_key = self._evict()
+
+        self._insert_head(_SIEVENode(key=key, value=value))
+        self._stats.current_size = len(self._data)
+        return evicted_key
+
+    def invalidate(self, key: str) -> bool:
+        node = self._data.get(key)
+        if node is None:
+            return False
+        self._remove_node(node)
+        self._stats.invalidations += 1
+        self._stats.current_size = len(self._data)
+        return True
+
+    def clear(self) -> None:
+        self._data.clear()
+        self._head = None
+        self._tail = None
+        self._hand = None
+        self._stats.current_size = 0
+
+    def _insert_head(self, node: _SIEVENode) -> None:
+        node.prev = None
+        node.next = self._head
+        if self._head is not None:
+            self._head.prev = node
+        else:
+            self._tail = node
+        self._head = node
+        self._data[node.key] = node
+
+    def _evict(self) -> str:
+        node = self._hand or self._tail
+        while node is not None and node.visited:
+            node.visited = False
+            node = node.prev or self._tail
+
+        assert node is not None, "cannot evict from an empty SIEVE cache"
+        self._hand = node.prev
+        evicted_key = node.key
+        self._remove_node(node)
+        self._stats.evictions += 1
+        self._stats.current_size = len(self._data)
+        return evicted_key
+
+    def _remove_node(self, node: _SIEVENode) -> None:
+        if self._hand is node:
+            self._hand = node.prev
+
+        if node.prev is not None:
+            node.prev.next = node.next
+        else:
+            self._head = node.next
+
+        if node.next is not None:
+            node.next.prev = node.prev
+        else:
+            self._tail = node.prev
+
+        del self._data[node.key]
+        node.prev = None
+        node.next = None
+
+
 def create_cache(policy_name: str, capacity: int, **kwargs) -> CachePolicy:
     policies = {
         "random": RandomEviction,
@@ -376,6 +484,7 @@ def create_cache(policy_name: str, capacity: int, **kwargs) -> CachePolicy:
         "lru": LRUEviction,
         "lfu": LFUEviction,
         "slru": SLRUEviction,
+        "sieve": SIEVEEviction,
     }
     policy_cls = policies.get(policy_name.lower())
     if policy_cls is None:

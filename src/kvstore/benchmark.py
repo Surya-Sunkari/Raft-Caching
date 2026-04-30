@@ -62,7 +62,7 @@ from cache import create_cache
 from workloads import create_workload
 
 
-POLICIES = ["random", "fifo", "lru", "lfu", "slru"]
+POLICIES = ["random", "fifo", "lru", "lfu", "slru", "sieve"]
 WORKLOADS = ["uniform", "zipfian", "hotkey"]
 CAPACITIES = [50, 100, 500]
 DEFAULT_NUM_KEYS = 1000
@@ -74,7 +74,7 @@ DEFAULT_SEED = 42
 # num_keys is deliberately ~4x the max capacity so evictions happen and
 # hit rate is informative. If num_keys <= capacity, the pre-populate
 # phase fills the cache with every key and every GET becomes a hit.
-INTEGRATION_POLICIES = ["random", "fifo", "lru"]
+INTEGRATION_POLICIES = ["random", "fifo", "lru", "sieve"]
 INTEGRATION_WORKLOADS = ["uniform", "zipfian"]
 INTEGRATION_CAPACITIES = [50]
 DEFAULT_INTEGRATION_NUM_KEYS = 200
