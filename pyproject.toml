@@ -9,4 +9,7 @@ dependencies = [
     "grpcio==1.59.0",
     "grpcio-tools==1.59.0",
     "protobuf==4.24.4",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+    "ipykernel>=6.29",
 ]

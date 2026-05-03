@@ -231,6 +231,8 @@ def run_matrix(
                     f"[{done:>2}/{total}] {workload:<10} cap={capacity:<4} "
                     f"{policy:<7} hit_rate={r.hit_rate:.4f} "
                     f"evictions={r.evictions:>6} "
+                    f"avg_lat={r.avg_latency_us:>7.2f}us "
+                    f"p99={r.p99_latency_us:>7.2f}us "
                     f"throughput={r.throughput_ops_per_sec:>10,.0f} ops/s"
                 )
     return results
@@ -262,6 +264,31 @@ def print_hit_rate_table(results: list[BenchmarkResult]) -> None:
             row = {r.policy: r for r in results if r.workload == w and r.capacity == c}
             cells = "  ".join(
                 f"{row[p].hit_rate:>8.4f}" if p in row else f"{'-':>8}"
+                for p in policies
+            )
+            print(f"{w:<10} {c:>5}  {cells}")
+
+
+def print_latency_table(results: list[BenchmarkResult], metric: str = "p99_latency_us") -> None:
+    """Pivot: rows=(workload, capacity), cols=policy, cells=latency in microseconds."""
+    workloads = sorted({r.workload for r in results})
+    capacities = sorted({r.capacity for r in results})
+    policies = sorted({r.policy for r in results})
+
+    label = {
+        "avg_latency_us": "Avg latency (us)",
+        "p50_latency_us": "p50 latency (us)",
+        "p99_latency_us": "p99 latency (us)",
+    }.get(metric, metric)
+    header = f"{'workload':<10} {'cap':>5}  " + "  ".join(f"{p:>10}" for p in policies)
+    print(f"\n{label} by (workload, capacity) x policy:")
+    print(header)
+    print("-" * len(header))
+    for w in workloads:
+        for c in capacities:
+            row = {r.policy: r for r in results if r.workload == w and r.capacity == c}
+            cells = "  ".join(
+                f"{getattr(row[p], metric):>10.2f}" if p in row else f"{'-':>10}"
                 for p in policies
             )
             print(f"{w:<10} {c:>5}  {cells}")
@@ -723,6 +750,8 @@ def main() -> None:
     write_csv(results, out_path)
     print(f"\nWrote {len(results)} rows to {out_path}")
     print_hit_rate_table(results)
+    print_latency_table(results, metric="avg_latency_us")
+    print_latency_table(results, metric="p99_latency_us")
 
 
 if __name__ == "__main__":
