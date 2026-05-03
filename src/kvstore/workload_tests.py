@@ -13,7 +13,7 @@ from workloads import (
     create_workload,
 )
 
-ALL_WORKLOADS = ["uniform", "zipfian", "hotkey"]
+ALL_WORKLOADS = ["uniform", "zipfian", "hotkey", "scan", "temporal", "writeheavy"]
 
 
 def _parse_key_id(key: str) -> int:
@@ -172,7 +172,7 @@ class TestCommonBehavior(unittest.TestCase):
 
     def test_single_key_universe(self):
         # HotKey requires hot_keys < num_keys, so can't run with num_keys=1.
-        for name in ("uniform", "zipfian"):
+        for name in ("uniform", "zipfian", "scan", "temporal", "writeheavy"):
             with self.subTest(workload=name):
                 w = create_workload(name, num_keys=1, seed=7)
                 for op in w.generate(100):
@@ -310,6 +310,110 @@ class TestHotKeyWorkload(unittest.TestCase):
                     idx = _parse_key_id(op.key)
                     self.assertGreaterEqual(idx, 0)
                     self.assertLess(idx, 100)
+
+
+class TestScanWorkload(unittest.TestCase):
+    def test_sequential_order(self):
+        nk = 5
+        w = create_workload("scan", num_keys=nk, read_ratio=1.0, seed=42)
+        keys = [op.key for op in w.generate(nk * 3)]
+        expected = [f"key_{i % nk}" for i in range(nk * 3)]
+        self.assertEqual(keys, expected)
+
+    def test_one_sweep_covers_all_keys(self):
+        nk = 50
+        w = create_workload("scan", num_keys=nk, read_ratio=1.0, seed=42)
+        keys = [op.key for op in w.generate(nk)]
+        self.assertEqual(set(keys), {f"key_{i}" for i in range(nk)})
+
+    def test_keys_independent_of_seed(self):
+        # Scan is deterministic in key order; only op types vary with seed.
+        nk = 20
+        w1 = create_workload("scan", num_keys=nk, read_ratio=1.0, seed=1)
+        w2 = create_workload("scan", num_keys=nk, read_ratio=1.0, seed=2)
+        keys1 = [op.key for op in w1.generate(nk * 2)]
+        keys2 = [op.key for op in w2.generate(nk * 2)]
+        self.assertEqual(keys1, keys2)
+
+    def test_continues_across_generate_calls(self):
+        nk = 10
+        chunk = nk - 2
+        w = create_workload("scan", num_keys=nk, read_ratio=1.0, seed=0)
+        first = [op.key for op in w.generate(chunk)]
+        second = [op.key for op in w.generate(chunk)]
+        self.assertEqual(first, [f"key_{i}" for i in range(chunk)])
+        self.assertEqual(second, [f"key_{(chunk + i) % nk}" for i in range(chunk)])
+
+
+class TestTemporalLocalityWorkload(unittest.TestCase):
+    def test_invalid_window_size_raises(self):
+        for bad in (0, -1, -10):
+            with self.subTest(window_size=bad):
+                with self.assertRaises(ValueError):
+                    create_workload("temporal", num_keys=100, window_size=bad)
+
+    def test_invalid_reaccess_prob_raises(self):
+        for bad in (-0.1, 1.1):
+            with self.subTest(reaccess_prob=bad):
+                with self.assertRaises(ValueError):
+                    create_workload("temporal", num_keys=100, reaccess_prob=bad)
+
+    def test_zero_reaccess_explores_uniformly(self):
+        # With reaccess_prob=0, every draw is uniform, so all keys appear.
+        N = 5000
+        nk = 100
+        w = create_workload(
+            "temporal", num_keys=nk, window_size=10, reaccess_prob=0.0,
+            read_ratio=1.0, seed=42,
+        )
+        seen = {op.key for op in w.generate(N)}
+        self.assertEqual(len(seen), nk)
+
+    def test_high_reaccess_concentrates_keys(self):
+        # With near-total reaccess, only the few keys that leak in via uniform
+        # fallback (~1% of ops) ever appear, so unique count << num_keys.
+        N = 5000
+        nk = 200
+        w = create_workload(
+            "temporal", num_keys=nk, window_size=10, reaccess_prob=0.99,
+            read_ratio=1.0, seed=42,
+        )
+        unique = len({op.key for op in w.generate(N)})
+        self.assertLess(unique, nk * 0.4)
+
+    def test_locality_creates_hot_keys(self):
+        # Reaccess pulls back keys already in the window, so the most popular key
+        # ends up much more common than under uniform.
+        N = 10000
+        nk = 100
+        w = create_workload(
+            "temporal", num_keys=nk, window_size=20, reaccess_prob=0.9,
+            read_ratio=1.0, seed=42,
+        )
+        counts = Counter(op.key for op in w.generate(N))
+        most_common = counts.most_common(1)[0][1]
+        uniform_expected = N / nk
+        self.assertGreater(most_common, uniform_expected * 3)
+
+
+class TestWriteHeavyWorkload(unittest.TestCase):
+    def test_default_read_ratio_is_half(self):
+        N = 20000
+        w = create_workload("writeheavy", num_keys=50, seed=42)
+        ops = list(w.generate(N))
+        read_share = sum(1 for o in ops if o.op == "get") / N
+        self.assertAlmostEqual(read_share, 0.5, delta=0.02)
+
+    def test_uniform_distribution(self):
+        nk = 20
+        N = 40000
+        w = create_workload("writeheavy", num_keys=nk, read_ratio=1.0, seed=42)
+        counts = Counter(op.key for op in w.generate(N))
+        self.assertEqual(len(counts), nk)
+        expected = N / nk
+        for key, count in counts.items():
+            with self.subTest(key=key):
+                self.assertAlmostEqual(count, expected, delta=expected * 0.10)
 
 
 if __name__ == "__main__":

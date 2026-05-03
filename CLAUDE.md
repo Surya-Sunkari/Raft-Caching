@@ -43,7 +43,7 @@ Integration tests (a1-a6) spawn real processes via `frontend.py` and use gRPC. T
 
 ```bash
 cd src/kvstore
-python benchmark.py                       # Unit mode: drives cache.py directly (fast, 6 policies x 3 workloads x 3 capacities)
+python benchmark.py                       # Unit mode: drives cache.py directly (fast, 6 policies x 6 workloads x 3 capacities)
 python benchmark.py --mode integration    # Integration mode: drives a real 5-server Raft cluster via gRPC (slow)
 ```
 
@@ -58,7 +58,7 @@ Flags: `--policies`, `--workloads`, `--capacities`, `--num-keys`, `--num-ops`, `
 - **`frontend.py`** — gRPC gateway on port 8001. Manages server process lifecycles (subprocess spawn/kill). Routes `Get` to any available server, `Put` to the leader.
 - **`server.py`** — Raft node implementing `KeyValueStoreServicer`. Each server runs on port `9001 + server_id` (IDs 0-4). Implements leader election, log replication, and state machine application. Uses `threading.RLock` for concurrency and `threading.Timer` for election timeouts (150-300ms).
 - **`cache.py`** — Pluggable cache eviction policies (random, fifo, lru, lfu, slru, sieve). Abstract base `CachePolicy` with `get/put/invalidate/clear` interface. Factory: `create_cache(policy_name, capacity)`.
-- **`workloads.py`** — Workload generators (`UniformWorkload`, `ZipfianWorkload`, `HotKeyWorkload`) that yield seeded `(op, key, value)` operations for the benchmark harness. Factory: `create_workload(name, num_keys, **kwargs)`.
+- **`workloads.py`** — Workload generators (`UniformWorkload`, `ZipfianWorkload`, `HotKeyWorkload`, `ScanWorkload`, `TemporalLocalityWorkload`, `WriteHeavyWorkload`) that yield seeded `(op, key, value)` operations for the benchmark harness. Factory: `create_workload(name, num_keys, **kwargs)`.
 - **`benchmark.py`** — Benchmark harness with `unit` and `integration` modes. Unit mode exercises `cache.py` directly; integration mode rewrites `config.ini` and drives a live Raft cluster via frontend gRPC, aggregating `GetCacheStats` across nodes.
 - **`raft.proto`** — Defines two gRPC services: `FrontEnd` (client-facing) and `KeyValueStore` (inter-node Raft RPCs: `AppendEntries`, `RequestVote`, `GetCacheStats`).
 - **`utils.py`** — Config helpers reading from `config.ini` (active servers, persistence path, ports, cache config via `get_cache_config()`).

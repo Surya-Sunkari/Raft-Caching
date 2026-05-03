@@ -62,8 +62,9 @@ from cache import create_cache
 from workloads import create_workload
 
 
+# non integration mode defaults, doesn't run through raft.
 POLICIES = ["random", "fifo", "lru", "lfu", "slru", "sieve"]
-WORKLOADS = ["uniform", "zipfian", "hotkey"]
+WORKLOADS = ["uniform", "zipfian", "hotkey", "scan", "temporal", "writeheavy"]
 CAPACITIES = [50, 100, 500]
 DEFAULT_NUM_KEYS = 1000
 DEFAULT_NUM_OPS = 50_000
@@ -75,7 +76,7 @@ DEFAULT_SEED = 42
 # hit rate is informative. If num_keys <= capacity, the pre-populate
 # phase fills the cache with every key and every GET becomes a hit.
 INTEGRATION_POLICIES = ["random", "fifo", "lru", "sieve"]
-INTEGRATION_WORKLOADS = ["uniform", "zipfian"]
+INTEGRATION_WORKLOADS = ["uniform", "zipfian", "hotkey", "scan", "temporal", "writeheavy"]
 INTEGRATION_CAPACITIES = [50]
 DEFAULT_INTEGRATION_NUM_KEYS = 200
 DEFAULT_INTEGRATION_NUM_OPS = 300
@@ -86,13 +87,10 @@ DEFAULT_BASE_SERVER_PORT = 9001
 WORKLOAD_KWARGS: dict[str, dict] = {
     "uniform": {},
     "zipfian": {"alpha": 1.1},
-    "hotkey": {"hot_keys": 20, "hot_fraction": 0.9},
-}
-
-INTEGRATION_WORKLOAD_KWARGS: dict[str, dict] = {
-    "uniform": {},
-    "zipfian": {"alpha": 1.1},
     "hotkey": {"hot_keys": 5, "hot_fraction": 0.9},
+    "scan": {},
+    "temporal": {"window_size": 5, "reaccess_prob": 0.7},
+    "writeheavy": {},
 }
 
 
@@ -230,7 +228,7 @@ def run_matrix(
                 )
                 results.append(r)
                 print(
-                    f"[{done:>2}/{total}] {workload:<8} cap={capacity:<4} "
+                    f"[{done:>2}/{total}] {workload:<10} cap={capacity:<4} "
                     f"{policy:<7} hit_rate={r.hit_rate:.4f} "
                     f"evictions={r.evictions:>6} "
                     f"throughput={r.throughput_ops_per_sec:>10,.0f} ops/s"
@@ -560,7 +558,7 @@ def run_integration_matrix(
     (or on crash/signal).
     """
     kwargs_by_workload = (
-        workload_kwargs if workload_kwargs is not None else INTEGRATION_WORKLOAD_KWARGS
+        workload_kwargs if workload_kwargs is not None else WORKLOAD_KWARGS
     )
 
     original_config = _backup_config()

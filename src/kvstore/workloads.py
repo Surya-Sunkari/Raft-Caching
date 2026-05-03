@@ -1,6 +1,7 @@
 import bisect
 import random
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
@@ -112,11 +113,69 @@ class HotKeyWorkload(Workload):
         return self._format_key(idx)
 
 
+class ScanWorkload(Workload):
+    """Sequential sweep through [0, num_keys), wrapping around forever."""
+
+    def __init__(self, num_keys: int, read_ratio: float = 0.9, seed: Optional[int] = None):
+        super().__init__(num_keys, read_ratio, seed)
+        self._next_index = 0
+
+    def _next_key(self) -> str:
+        key = self._format_key(self._next_index)
+        self._next_index = (self._next_index + 1) % self._num_keys
+        return key
+
+
+class TemporalLocalityWorkload(Workload):
+    """Recently accessed keys are reused with high probability.
+
+    With probability `reaccess_prob`, the next key is drawn uniformly from the
+    last `window_size` accesses; otherwise it is drawn uniformly from
+    [0, num_keys). The first access falls through to the uniform draw because
+    the window starts empty.
+    """
+
+    def __init__(
+        self,
+        num_keys: int,
+        window_size: int = 10,
+        reaccess_prob: float = 0.7,
+        read_ratio: float = 0.9,
+        seed: Optional[int] = None,
+    ):
+        super().__init__(num_keys, read_ratio, seed)
+        if window_size <= 0:
+            raise ValueError("window_size must be positive")
+        if not 0.0 <= reaccess_prob <= 1.0:
+            raise ValueError("reaccess_prob must be in [0, 1]")
+        self._window_size = window_size
+        self._reaccess_prob = reaccess_prob
+        self._recent: deque[int] = deque(maxlen=window_size)
+
+    def _next_key(self) -> str:
+        if self._recent and self._rng.random() < self._reaccess_prob:
+            idx = self._recent[self._rng.randrange(len(self._recent))]
+        else:
+            idx = self._rng.randrange(self._num_keys)
+        self._recent.append(idx)
+        return self._format_key(idx)
+
+
+class WriteHeavyWorkload(UniformWorkload):
+    """Uniform key access with a 50/50 read/write mix by default."""
+
+    def __init__(self, num_keys: int, read_ratio: float = 0.5, seed: Optional[int] = None):
+        super().__init__(num_keys, read_ratio=read_ratio, seed=seed)
+
+
 def create_workload(name: str, num_keys: int, **kwargs) -> Workload:
     workloads = {
         "uniform": UniformWorkload,
         "zipfian": ZipfianWorkload,
         "hotkey": HotKeyWorkload,
+        "scan": ScanWorkload,
+        "temporal": TemporalLocalityWorkload,
+        "writeheavy": WriteHeavyWorkload,
     }
     workload_cls = workloads.get(name.lower())
     if workload_cls is None:

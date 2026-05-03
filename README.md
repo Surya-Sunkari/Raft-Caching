@@ -44,7 +44,7 @@ Cache settings live in `src/kvstore/config.ini` under `[Cache]`:
 
 ```ini
 [Cache]
-policy = none       # none, random, fifo, lru, lfu, slru
+policy = none       # none, random, fifo, lru, lfu, slru, sieve
 capacity = 0        # max entries (0 = disabled)
 write_strategy = write_through  # write_through or write_invalidate
 ```
@@ -60,6 +60,7 @@ Set `policy` to a policy name and `capacity > 0` to enable caching.
 | `lru` | Evicts the least recently used key |
 | `lfu` | Evicts the least frequently used key (LRU tiebreak) |
 | `slru` | Segmented LRU with probation and protected segments |
+| `sieve` | Circular hand sweeps a visited bit; first unvisited key is evicted |
 
 ### Write Strategies
 
@@ -90,11 +91,11 @@ print(cache.stats)      # CacheStats(hits=1, misses=0, ...)
 # Unit mode: drives cache.py directly (no network, fast)
 python benchmark.py
 
-# Integration mode: drives a real 5-server Raft cluster via gRPC, only uses a few policies and workloads
+# Integration mode: drives a real 5-server Raft cluster via gRPC; defaults to a subset of policies for speed
 python benchmark.py --mode integration
 
 # Run integration test for all policies and all workloads
-python benchmark.py --mode integration --policies random,fifo,lru,lfu,slru --workloads uniform,zipfian,hotkey 
+python benchmark.py --mode integration --policies random,fifo,lru,lfu,slru,sieve --workloads uniform,zipfian,hotkey,scan,temporal,writeheavy
 ```
 
 ### Workloads
@@ -104,6 +105,9 @@ python benchmark.py --mode integration --policies random,fifo,lru,lfu,slru --wor
 | `uniform` | Keys drawn uniformly over `[0, num_keys)` |
 | `zipfian` | Power-law skew; `alpha` controls skew (default 1.1) |
 | `hotkey` | Small hot set receives `hot_fraction` of traffic |
+| `scan` | Sequential sweep through `[0, num_keys)`, wrapping forever |
+| `temporal` | Recent keys reused with `reaccess_prob`; otherwise uniform fallback |
+| `writeheavy` | Uniform key access with a 50/50 read/write mix |
 
 ### Flags
 
