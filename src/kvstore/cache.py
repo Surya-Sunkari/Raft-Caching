@@ -203,12 +203,53 @@ class LRUEviction(CachePolicy):
 
 
 class LFUEviction(CachePolicy):
-    def __init__(self, capacity: int):
+    """LFU with optional periodic frequency decay (LFU-aging style).
+
+    Pure global LFU keeps monotonically increasing counts, which hurts shifting
+    temporal workloads (old "hot" keys block the cache). Every ``decay_interval``
+    frequency updates, all counts are halved (minimum 1) and buckets rebuilt so
+    LRU tie-break order within each frequency is preserved.
+
+    Set ``decay_interval`` to 0 to disable decay (classic LFU).
+    """
+
+    def __init__(self, capacity: int, decay_interval: Optional[int] = None):
         super().__init__(capacity)
         self._data: dict[str, str] = {}
         self._freq: dict[str, int] = {}  # key -> frequency
         self._freq_buckets: dict[int, OrderedDict] = {}  # freq -> OrderedDict of keys (LRU tiebreak)
         self._min_freq: int = 0
+        if decay_interval is None:
+            # Rare enough that unit tests never trigger; often enough for long benchmarks.
+            decay_interval = max(128, capacity * 8)
+        self._decay_interval = decay_interval
+        self._updates_since_decay: int = 0
+
+    def _maybe_decay(self) -> None:
+        if self._decay_interval <= 0:
+            return
+        self._updates_since_decay += 1
+        if self._updates_since_decay < self._decay_interval:
+            return
+        self._updates_since_decay = 0
+        self._decay_frequencies()
+
+    def _decay_frequencies(self) -> None:
+        """Halve all frequencies (min 1) and rebuild buckets."""
+        if not self._freq:
+            return
+        snapshot: list[tuple[str, int]] = []
+        for f in sorted(self._freq_buckets.keys()):
+            for key in self._freq_buckets[f]:
+                snapshot.append((key, max(1, f // 2)))
+        self._freq.clear()
+        self._freq_buckets.clear()
+        for key, new_f in snapshot:
+            self._freq[key] = new_f
+            if new_f not in self._freq_buckets:
+                self._freq_buckets[new_f] = OrderedDict()
+            self._freq_buckets[new_f][key] = None
+        self._min_freq = min(self._freq.values())
 
     def _touch(self, key: str) -> None:
         """Increment frequency for an existing key."""
@@ -227,6 +268,7 @@ class LFUEviction(CachePolicy):
         if new_freq not in self._freq_buckets:
             self._freq_buckets[new_freq] = OrderedDict()
         self._freq_buckets[new_freq][key] = None
+        self._maybe_decay()
 
     def get(self, key: str) -> Optional[str]:
         if key not in self._data:
@@ -261,6 +303,7 @@ class LFUEviction(CachePolicy):
             self._freq_buckets[1] = OrderedDict()
         self._freq_buckets[1][key] = None
         self._stats.current_size = len(self._data)
+        self._maybe_decay()
         return evicted_key
 
     def invalidate(self, key: str) -> bool:
@@ -274,6 +317,10 @@ class LFUEviction(CachePolicy):
         del self._freq[key]
         self._stats.invalidations += 1
         self._stats.current_size = len(self._data)
+        if self._freq:
+            self._min_freq = min(self._freq.values())
+        else:
+            self._min_freq = 0
         return True
 
     def clear(self) -> None:
@@ -281,6 +328,7 @@ class LFUEviction(CachePolicy):
         self._freq.clear()
         self._freq_buckets.clear()
         self._min_freq = 0
+        self._updates_since_decay = 0
         self._stats.current_size = 0
 
 

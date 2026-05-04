@@ -325,6 +325,25 @@ class TestLFUEviction(unittest.TestCase):
         # freq: b=1, c=2, d=1. Evict "b" (freq=1, inserted before d)
         self.assertEqual(c.put("e", "5"), "b")
 
+    def test_decay_interval_zero_disables_decay(self):
+        c = create_cache("lfu", 3, decay_interval=0)
+        self.assertEqual(c._decay_interval, 0)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        c.get("b")
+        c.get("c")
+        self.assertEqual(c.put("d", "4"), "a")
+
+    def test_decay_fires_without_corrupting_structure(self):
+        c = create_cache("lfu", 5, decay_interval=3)
+        for i in range(5):
+            c.put(f"k{i}", str(i))
+        for _ in range(10):
+            c.get("k0")
+        for i in range(5):
+            self.assertIsNotNone(c.get(f"k{i}"))
+
 
 class TestSLRUEviction(unittest.TestCase):
     def test_new_keys_enter_probation(self):
