@@ -10,10 +10,11 @@ from cache import (
     LRUEviction,
     LFUEviction,
     SLRUEviction,
+    ARCEviction,
     SIEVEEviction,
 )
 
-ALL_POLICIES = ["random", "fifo", "lru", "lfu", "slru", "sieve"]
+ALL_POLICIES = ["random", "fifo", "lru", "lfu", "slru", "arc", "sieve"]
 
 
 class TestCacheFactory(unittest.TestCase):
@@ -406,6 +407,60 @@ class TestSLRUEviction(unittest.TestCase):
         # Now at capacity, should evict from probation
         evicted = c.put("e", "5")
         self.assertIn(evicted, ["c", "d"])
+
+
+class TestARCEviction(unittest.TestCase):
+    def test_factory_creates_arc(self):
+        c = create_cache("arc", 4)
+        self.assertIsInstance(c, ARCEviction)
+
+    def test_hit_in_t1_promotes_to_t2(self):
+        c = create_cache("arc", 4)
+        c.put("a", "1")
+        c.put("b", "2")
+        self.assertIn("a", c._t1)
+        c.get("a")
+        self.assertNotIn("a", c._t1)
+        self.assertIn("a", c._t2)
+        self.assertEqual(c.get("a"), "1")
+
+    def test_put_miss_evicts_and_ghost(self):
+        c = create_cache("arc", 2)
+        c.put("a", "1")
+        c.put("b", "2")
+        evicted = c.put("c", "3")
+        self.assertEqual(evicted, "a")
+        self.assertIn("a", c._b1)
+        self.assertEqual(c.stats.current_size, 2)
+
+    def test_ghost_miss_reinserts_into_t2(self):
+        c = create_cache("arc", 2)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")  # evicts "a" to B1
+        self.assertIn("a", c._b1)
+        c.put("a", "10")  # ghost hit: back as frequent
+        self.assertIn("a", c._t2)
+        self.assertEqual(c.get("a"), "10")
+
+    def test_invalidate_removes_from_t1_t2_and_ghosts(self):
+        c = create_cache("arc", 2)
+        c.put("a", "1")
+        c.put("b", "2")
+        c.put("c", "3")
+        self.assertTrue(c.invalidate("a"))
+        self.assertNotIn("a", c._b1)
+        self.assertTrue(c.invalidate("b"))
+        self.assertEqual(c.stats.current_size, 0)
+
+    def test_clear_resets(self):
+        c = create_cache("arc", 3)
+        c.put("a", "1")
+        c.get("a")
+        c.put("b", "2")
+        c.clear()
+        self.assertEqual(c._p, 0)
+        self.assertEqual(c.stats.current_size, 0)
 
 
 class TestSIEVEEviction(unittest.TestCase):

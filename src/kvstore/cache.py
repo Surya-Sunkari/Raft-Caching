@@ -417,6 +417,144 @@ class SLRUEviction(CachePolicy):
         self._stats.current_size = 0
 
 
+class ARCEviction(CachePolicy):
+    """Adaptive Replacement Cache (Megiddo & Modha, USENIX FAST 2003).
+
+    Maintains two LRU lists for cached entries—T1 (recent) and T2 (frequent)—
+    plus two ghost lists B1/B2 (keys only) recording evictions from T1/T2.
+    An adaptive target ``p`` shifts capacity favor between recency (T1) and
+    frequency (T2) based on whether misses hit B1 vs B2 ghosts.
+    """
+
+    def __init__(self, capacity: int):
+        super().__init__(capacity)
+        self._p = 0
+        self._t1: OrderedDict[str, str] = OrderedDict()
+        self._t2: OrderedDict[str, str] = OrderedDict()
+        self._b1: OrderedDict[str, None] = OrderedDict()
+        self._b2: OrderedDict[str, None] = OrderedDict()
+
+    def _trim_directory(self) -> None:
+        c2 = 2 * self._stats.capacity
+        while len(self._t1) + len(self._t2) + len(self._b1) + len(self._b2) > c2:
+            if len(self._b1) >= len(self._b2):
+                self._b1.popitem(last=False)
+            else:
+                self._b2.popitem(last=False)
+
+    def _replace(self, x_in_b2: bool) -> str:
+        """Evict one real entry into the appropriate ghost list. Returns evicted key."""
+        c, p = self._stats.capacity, self._p
+        t1, t2, b1, b2 = self._t1, self._t2, self._b1, self._b2
+
+        from_t1 = False
+        if len(t1) >= 1:
+            if len(t1) > p or (x_in_b2 and len(t1) == p):
+                from_t1 = True
+            elif len(t2) == 0:
+                from_t1 = True
+
+        if from_t1:
+            y, _ = t1.popitem(last=False)
+            b1[y] = None
+            b1.move_to_end(y)
+            while len(b1) > p:
+                b1.popitem(last=False)
+        else:
+            y, _ = t2.popitem(last=False)
+            b2[y] = None
+            b2.move_to_end(y)
+            while len(b2) > c - p:
+                b2.popitem(last=False)
+
+        self._trim_directory()
+        self._stats.evictions += 1
+        return y
+
+    def _hit_t1(self, key: str) -> str:
+        val = self._t1.pop(key)
+        self._t2[key] = val
+        self._t2.move_to_end(key)
+        return val
+
+    def get(self, key: str) -> Optional[str]:
+        if key in self._t1:
+            self._stats.hits += 1
+            return self._hit_t1(key)
+        if key in self._t2:
+            self._stats.hits += 1
+            self._t2.move_to_end(key)
+            return self._t2[key]
+        self._stats.misses += 1
+        return None
+
+    def put(self, key: str, value: str) -> Optional[str]:
+        if key in self._t1:
+            self._t1[key] = value
+            self._hit_t1(key)
+            self._stats.current_size = len(self._t1) + len(self._t2)
+            return None
+        if key in self._t2:
+            self._t2[key] = value
+            self._t2.move_to_end(key)
+            self._stats.current_size = len(self._t1) + len(self._t2)
+            return None
+
+        x_in_b1 = key in self._b1
+        x_in_b2 = key in self._b2
+
+        evicted_key = None
+        if len(self._t1) + len(self._t2) == self._stats.capacity:
+            evicted_key = self._replace(x_in_b2)
+
+        if x_in_b1:
+            self._p = min(
+                self._stats.capacity,
+                self._p + max(1, len(self._b2) // max(len(self._b1), 1)),
+            )
+            del self._b1[key]
+        elif x_in_b2:
+            self._p = max(
+                0,
+                self._p - max(1, len(self._b1) // max(len(self._b2), 1)),
+            )
+            del self._b2[key]
+
+        if x_in_b1 or x_in_b2:
+            self._t2[key] = value
+            self._t2.move_to_end(key)
+        else:
+            self._t1[key] = value
+            self._t1.move_to_end(key)
+
+        self._trim_directory()
+        self._stats.current_size = len(self._t1) + len(self._t2)
+        return evicted_key
+
+    def invalidate(self, key: str) -> bool:
+        if key in self._t1:
+            del self._t1[key]
+        elif key in self._t2:
+            del self._t2[key]
+        elif key in self._b1:
+            del self._b1[key]
+        elif key in self._b2:
+            del self._b2[key]
+        else:
+            return False
+        self._stats.invalidations += 1
+        self._stats.current_size = len(self._t1) + len(self._t2)
+        return True
+
+    def clear(self) -> None:
+        self._p = 0
+        self._t1.clear()
+        self._t2.clear()
+        self._b1.clear()
+        self._b2.clear()
+        self._stats.current_size = 0
+
+
 @dataclass
 class _SIEVENode:
     key: str
@@ -533,6 +671,7 @@ def create_cache(policy_name: str, capacity: int, **kwargs) -> CachePolicy:
         "lfu": LFUEviction,
         "lfu_decay": LFUEviction,
         "slru": SLRUEviction,
+        "arc": ARCEviction,
         "sieve": SIEVEEviction,
     }
     policy_cls = policies.get(policy_name.lower())
