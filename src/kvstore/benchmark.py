@@ -63,7 +63,7 @@ from workloads import create_workload
 
 
 # non integration mode defaults, doesn't run through raft.
-POLICIES = ["random", "fifo", "lru", "lfu", "slru", "sieve"]
+POLICIES = ["random", "fifo", "lru", "lfu", "lfu_decay", "slru", "sieve"]
 WORKLOADS = ["uniform", "zipfian", "hotkey", "scan", "temporal", "writeheavy"]
 CAPACITIES = [50, 100, 500]
 DEFAULT_NUM_KEYS = 1000

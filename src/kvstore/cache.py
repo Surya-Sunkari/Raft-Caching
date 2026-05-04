@@ -531,10 +531,14 @@ def create_cache(policy_name: str, capacity: int, **kwargs) -> CachePolicy:
         "fifo": FIFOEviction,
         "lru": LRUEviction,
         "lfu": LFUEviction,
+        "lfu_decay": LFUEviction,
         "slru": SLRUEviction,
         "sieve": SIEVEEviction,
     }
     policy_cls = policies.get(policy_name.lower())
     if policy_cls is None:
         raise ValueError(f"Unknown cache policy: {policy_name}. Available: {list(policies.keys())}")
+    # "lfu" keeps classic behaviour (no decay) unless caller explicitly passes decay_interval.
+    if policy_name.lower() == "lfu" and "decay_interval" not in kwargs:
+        kwargs["decay_interval"] = 0
     return policy_cls(capacity, **kwargs)
