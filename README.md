@@ -44,7 +44,7 @@ Cache settings live in `src/kvstore/config.ini` under `[Cache]`:
 
 ```ini
 [Cache]
-policy = none       # none, random, fifo, lru, lfu, slru, sieve
+policy = none       # none, random, fifo, lru, lfu, lfu_decay, slru, sieve
 capacity = 0        # max entries (0 = disabled)
 write_strategy = write_through  # write_through or write_invalidate
 ```
@@ -58,7 +58,8 @@ Set `policy` to a policy name and `capacity > 0` to enable caching.
 | `random` | Evicts a random key (O(1) via swap-with-last) |
 | `fifo` | Evicts the oldest inserted key (no reordering on access) |
 | `lru` | Evicts the least recently used key |
-| `lfu` | Evicts the least frequently used key (LRU tiebreak) |
+| `lfu` | Evicts the least frequently used key (LRU tiebreak); classic LFU with no decay |
+| `lfu_decay` | LFU with periodic frequency halving (LFU-aging) so old hot keys can be displaced |
 | `slru` | Segmented LRU with probation and protected segments |
 | `sieve` | Circular hand sweeps a visited bit; first unvisited key is evicted |
 
@@ -95,7 +96,7 @@ python benchmark.py
 python benchmark.py --mode integration
 
 # Run integration test for all policies and all workloads
-python benchmark.py --mode integration --policies random,fifo,lru,lfu,slru,sieve --workloads uniform,zipfian,hotkey,scan,temporal,writeheavy
+python benchmark.py --mode integration --policies random,fifo,lru,lfu,lfu_decay,slru,sieve --workloads uniform,zipfian,hotkey,scan,temporal,writeheavy
 ```
 
 ### Workloads
